@@ -117,7 +117,9 @@ rootfs and a 64 MiB `tmpfs` for `/tmp`.
 | `configs/tasks/` | JSON Schema + three example tasks |
 | `terraform/` | OpenTofu OCI modules: VCN, security list, A1.Flex compute, block volume, cloud-init |
 | `tests/test_scaffold.py` | 31 unit tests: config, registry, tools, delegation, loop, auth, compose |
-| `docs/` | Stage evidence |
+| `MANUAL_PREREQS.md` | Operator checklist: OCI credentials, SSH key, volume, models, `.env` |
+| `AGENT_GUIDE.md` | AI-agent playbook: bring-up, monitoring, delegation debugging |
+| `docs/` | Stage evidence (`stage-1-verification.txt`, `stage-2-verification.txt`) |
 
 ## Quickstart
 
@@ -149,13 +151,18 @@ Without Docker, the configuration and the orchestration loop are testable
 directly:
 
 ```bash
-python -m unittest discover -s tests -v          # 31 tests
+python -m unittest discover -s tests -v          # 33 tests
 PYTHONPATH=src python -m swarm --list
 PYTHONPATH=src python -m swarm --task configs/tasks/research-brief.json --dry-run
 ```
 
 `--dry-run` validates the workflow and renders the delegation plan without
 calling a model, so it is safe on a laptop with no weights.
+
+Before deploying to a cloud host, work through
+[`MANUAL_PREREQS.md`](MANUAL_PREREQS.md) (credentials, SSH key, block volume,
+model weights, `.env`), then follow [`AGENT_GUIDE.md`](AGENT_GUIDE.md) for the
+run, monitoring and delegation-debugging playbook.
 
 ## Task contract
 
@@ -250,10 +257,10 @@ AWS and GCP are supported ports, not certified targets.
 | --- | --- | --- |
 | 1 | Scaffold, Compose topology, personas, workflows, task schema, orchestration loop | unit tests, compose config, image build, local API surface — **done** (`docs/stage-1-verification.txt`) |
 | 2 | OCI network, inference node, block volume, cloud-init | `fmt`, `validate`, `plan` — **done** (`docs/stage-2-verification.txt`), not applied |
-| 3 | Distributed fan-out and queueing across nodes | multi-node run record |
+| 3 | Agent guide and manual prerequisites | both documents complete, links valid — **done** |
 | 4 | Local evaluation: task success, latency, memory | measured recall/task metrics |
 | 5 | Live OCI deployment | cloud-init done, volume mounted, healthy services, live run |
-| 6 | Scale and recovery | load test, restart/recovery drill |
+| 6 | Scale and recovery (includes distributed fan-out and queueing across nodes) | load test, multi-node run record, restart drill |
 | 7 | Security audit, documentation, cost model | zero-leak audit signed off |
 
 ## License

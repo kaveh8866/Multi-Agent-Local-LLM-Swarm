@@ -1,0 +1,126 @@
+Project — Multi-Agent Local LLM Swarm
+Stage 3 — agent guide and manual prerequisites
+Date: 2026-11-18
+Host: Windows workstation (documentation stage; no container or cloud run)
+Repository: https://github.com/kaveh8866/Multi-Agent-Local-LLM-Swarm
+Branch: main
+
+Scope of this stage: the two documents an operator and an AI coding agent need
+before any deployment — an execution playbook (AGENT_GUIDE.md) and a human
+prerequisite checklist (MANUAL_PREREQS.md) — plus the README consistency fixes
+they imply. No code, container or cloud resource changed.
+
+1. Documents produced
+---------------------
+AGENT_GUIDE.md        437 lines, 2,860 words, 16 numbered sections
+MANUAL_PREREQS.md     412 lines, 2,541 words, 17 sections
+README.md             updated (repository map, quickstart pointer, test count,
+                      Stage 3 roadmap row)
+terraform/README.md   unchanged in this stage
+
+AGENT_GUIDE.md now covers, with exact commands:
+  - preflight: git, Python/PyYAML, Docker/Compose, 33 unit tests, tofu fmt/validate
+  - local bring-up: .env creation and token generation, compose config/build/up,
+    health contract, port-conflict handling (OLLAMA_PORT / SWARM_PORT)
+  - persistent storage: named-volume inspection, weights into
+    cloudguard-llm-swarm-weights, and the OCI block-volume mount checks
+    (findmnt, lsblk, systemctl status llm-swarm-mount, df)
+  - model bootstrap: ollama pull inside the container, ollama list,
+    Modelfile.swarm -> ollama create swarm-agent
+  - task execution: dry run, --list, API POST with bearer token, CLI live run,
+    --json run record, HTTP status semantics, run statuses
+  - agent communication: run-record fields (plan, turns[].instruction,
+    turns[].duration_ms, tool_observations, errors), transcript semantics,
+    timestamped container logs and Ollama per-request timings
+  - monitoring: docker stats, Ollama /api/ps, memory limits, OOMKilled,
+    free/vmstat, weights-volume growth, nvidia-smi under the vLLM override,
+    sizing rules of thumb (1 GB / 3 GB / 7–9 GB at 4k context)
+  - delegation debugging: a 7-step escalation from --dry-run to transport
+    errors, plan-shape diagnosis, tool-refusal causes, timeout isolation,
+    and a minimal reproduction command
+  - persona/workflow extension rules, configuration invariants, expanded
+    failure table, certification scope, roadmap and handoff checklist
+
+MANUAL_PREREQS.md now covers, as a checkbox checklist:
+  - capacity planning table (0.5B / 3B / 8B / 13B against the 24 GB profile)
+  - workstation tools and verification commands
+  - OCI credentials: API-key creation, ~/.oci/config, mode 600, the four
+    identifiers, and a compartment-scoped IAM policy
+  - dedicated SSH key pair; public-key content handling
+  - operator CIDRs and the 22/11434/8090 exposure, with the 0.0.0.0/0 rejection
+  - terraform.tfvars population and ignore verification
+  - plan review (8 resources) and an explicit cost gate before apply
+  - block-volume verification on the host, plus a labelled DESTRUCTIVE manual
+    fallback for console-created volumes
+  - model weights: pull/verify, licence note (Qwen2.5 Apache-2.0, Llama and
+    Mistral terms), air-gapped transfer, disk checks
+  - .env population with a generated token, field-by-field table, permissions
+  - pre-deployment gate, first-run commands, evidence location
+  - cost/quota notes, certification scope, teardown/recovery, troubleshooting
+
+2. Multi-cloud portability and certification statements
+-------------------------------------------------------
+Both documents state, in their own words, that the IaC and container
+configuration are cloud-agnostic (AWS EC2 + EBS + VPC, GCP GCE + Persistent
+Disk + VPC, OCI A1.Flex + Block Volume + VCN), and that final production
+verification and testing certification are performed strictly on Oracle Cloud
+Infrastructure with trial credits, high-RAM Ampere ARM instances and persistent
+block storage. AWS and GCP are documented ports, not certified targets.
+
+3. Structural verification
+--------------------------
+No markdown linter is installed in this repository, so structure was checked
+with a scripted pass (fenced blocks stripped before heading checks):
+
+  AGENT_GUIDE.md     H1 count 1, H2 count 16, code fences 32 (balanced),
+                     no duplicate H2
+  MANUAL_PREREQS.md  H1 count 1, H2 count 17, code fences 40 (balanced),
+                     no duplicate H2
+  README.md          H1 count 1, H2 count 12, code fences 10 (balanced)
+  terraform/README.md H1 count 1, H2 count 7, code fences 6 (balanced)
+
+Local link resolution: every relative markdown link in the four documents
+resolves to an existing file (MANUAL_PREREQS.md, AGENT_GUIDE.md, README.md,
+terraform/README.md, docs/stage-1-verification.txt, docs/stage-2-verification.txt).
+
+Secret-signature scan of the three changed documents (sk-…, AKIA…, ghp_…,
+PEM private-key blocks, full OCIDs): no matches.
+
+Unit suite re-run after the documentation changes (no code touched):
+  Ran 33 tests
+  OK
+
+4. Consistency fixes made in this stage
+---------------------------------------
+- README quickstart still claimed "31 tests"; the suite has 33. Corrected.
+- README roadmap row 3 was "Distributed fan-out and queueing across nodes",
+  which does not match this portfolio's Stage 3 (documentation). Row 3 is now
+  "Agent guide and manual prerequisites — done"; distributed fan-out moved to
+  Stage 6 (scale and recovery) in both README and AGENT_GUIDE, with an explicit
+  note so the change is not silent.
+- README repository map now lists MANUAL_PREREQS.md and AGENT_GUIDE.md and the
+  two stage evidence files.
+- README quickstart now points at MANUAL_PREREQS.md and AGENT_GUIDE.md before a
+  cloud deployment.
+- AGENT_GUIDE records the known gap that Compose still uses Docker named
+  volumes, so the OCI block volume is mounted but not yet consumed by the stack
+  (the Stage 5 override is not written).
+
+5. Not verified at Stage 3
+--------------------------
+- Commands that require a cloud host were not executed in this stage: tofu
+  apply, ssh to a booted instance, cloud-init, the block-volume mount, model
+  pulls on the node. They are documented from the Stage 1/2 evidence and the
+  OCI provider contract, not from a deployment.
+- The GPU commands (nvidia-smi under docker/compose.vllm.yaml) are unexecuted;
+  this workstation has no GPU and the override has only been syntax-validated.
+- No markdown renderer was run; formatting was checked structurally, not
+  visually, and no link checker beyond local file existence was used.
+- The manual fallback volume commands are destructive by nature and were not
+  run against a real volume.
+
+6. CloudGuard
+-------------
+The repository remains under the CloudGuard portability audit. The audit is
+executed by the vault after this commit; the certification status it records is
+reported with the Stage 3 handover.
