@@ -1,0 +1,245 @@
+Project — Multi-Agent Local LLM Swarm
+Stage 1 — scaffold and CloudGuard profiling
+Date: 2026-11-18
+Host: Windows workstation, Docker Desktop (linux/amd64 containers)
+Repository: https://github.com/kaveh8866/Multi-Agent-Local-LLM-Swarm
+Branch: main
+
+Scope of this stage: repository scaffold, container topology, persona and
+workflow configuration, task schema, orchestration loop, tool gateway, task API
+and CloudGuard metadata. No OCI resource was created. The compose stack was
+built and run locally to prove the topology, not to benchmark models.
+
+Tooling observed
+----------------
+Python             3.11.9 (host, unit tests and CLI)
+PyYAML             6.0.3
+jsonschema         4.26.0 (schema validation only)
+Docker             29.8.1
+Docker Compose     5.5.1
+Image Python       3.12 (python:3.12-slim)
+Inference image    ollama/ollama:0.5.7 (4.92 GB)
+GPU override image vllm/vllm-openai:v0.6.6 (manifest checked, not pulled)
+Smoke model        qwen2.5:0.5b (397 MB, pulled into the weights volume)
+
+1. Syntax and configuration checks
+----------------------------------
+python -m compileall -q src tests
+  exit 0
+
+python -m unittest discover -s tests -q
+  Ran 33 tests
+  OK
+
+Coverage: settings defaults from an empty environment and range validation,
+persona/workflow loading, prompt placeholder binding, task validation (workflow,
+objective, tool whitelist), JSON-Schema conformance of the three example tasks,
+AST calculator acceptance and rejection (names, calls, exponent 64, division by
+zero), text statistics, tool argument whitelisting, plan parsing (JSON and list
+fallbacks), capability routing, dry-run with no model call, live delegation and
+synthesis, tool observation recording, refusal of a tool not granted to a
+persona, failure propagation, step-budget exhaustion, base-URL normalisation,
+bearer-token checks, HTTP health/ready, the keep-alive regression described in
+section 7, and the compose hardening contract.
+
+docker compose --env-file .env -f docker/docker-compose.yml config -q
+  exit 0
+
+docker compose --env-file .env -f docker/docker-compose.yml config --services
+  llm-runtime
+  swarm-orchestrator
+
+docker compose --env-file .env config -q            # root entrypoint + extends
+  exit 0
+
+docker compose --env-file .env -f docker/docker-compose.yml \
+  -f docker/compose.vllm.yaml config -q             # GPU override
+  exit 0
+
+docker compose --env-file .env config --volumes
+  model-weights
+  swarm-state
+
+Pinned image tags resolved against the registries (docker manifest inspect):
+  ollama/ollama:0.5.7        exit 0
+  vllm/vllm-openai:v0.6.6    exit 0
+
+configs/tasks/schema.json
+  valid Draft 2020-12 schema
+  code-review.json       -> code_review
+  reasoning-chain.json   -> reasoning_chain
+  research-brief.json    -> research_brief
+
+CLI, no Docker and no model required:
+
+PYTHONPATH=src python -m swarm --list --config-dir configs
+  personas   coder, critic, planner, researcher
+  workflows  code_review (plan:single:planner, review:fanout:coder,
+             verdict:single:critic)
+             reasoning_chain (plan, reason:fanout:researcher, verify)
+             research_brief (plan, gather:fanout:researcher, synthesise)
+  exit 0
+
+PYTHONPATH=src python -m swarm --task configs/tasks/research-brief.json --dry-run
+  status     planned
+  steps      0
+  plan       - gather: fanout stage for persona researcher
+             - synthesise: single stage for persona critic
+  exit 0
+
+2. Image build
+--------------
+docker compose --env-file .env -f docker/docker-compose.yml build swarm-orchestrator
+  exit 0
+  image  cloudguard/llm-swarm:local
+  id     sha256:4f4570b560149ba71b35ee986d670770929d7a66849dfb806961973d83106069
+  size   182,303,078 bytes (182 MB)
+  User   uid/gid 10001; no model weights in the image
+
+3. Stack startup
+----------------
+docker compose --env-file .env -f docker/docker-compose.yml up -d
+  exit 0
+
+docker compose ... ps
+  cg-swarm-llm           running  Up (healthy)  127.0.0.1:11435->11434/tcp
+  cg-swarm-orchestrator  running  Up (healthy)  127.0.0.1:8090->8080/tcp
+
+Health is measured, not assumed: both health checks reached "healthy" under
+Compose (llm-runtime via `ollama list`, orchestrator via
+`python -m swarm --healthcheck`).
+
+Port note: host port 11434 is already bound by a native process on this
+workstation (PID 3764, loopback only), so the local `.env` sets
+OLLAMA_PORT=11435 while the in-network URL stays http://llm-runtime:11434. The
+container-internal port is unchanged; only the operator-facing binding differs.
+The worker uses 8090 because 8080 is the CloudGuard development server.
+
+4. API surface (live)
+---------------------
+GET /health
+  200 {"status":"ok","service":"swarm-orchestrator","version":"0.1.0",
+       "model":"qwen2.5:3b-instruct" (then qwen2.5:0.5b),
+       "workflows":["code_review","reasoning_chain","research_brief"],
+       "personas":["coder","critic","planner","researcher"]}
+
+GET /ready
+  200 {"status":"ready","service":"swarm-orchestrator","llm":"reachable",
+       "model":"qwen2.5:0.5b"}
+
+POST /v1/tasks without a bearer token
+  401 {"status":"error","error":"missing or invalid orchestrator token"}
+
+POST /v1/tasks with an invalid workflow
+  422 {"status":"error","error":"task.workflow must be one of: code_review,
+       reasoning_chain, research_brief"}
+
+POST /v1/tasks {"dry_run":true} with a valid token
+  200, run status "planned", steps 0, turns ["plan"]
+
+5. Live multi-agent run (real model, real inference server)
+-----------------------------------------------------------
+Model qwen2.5:0.5b served by ollama/ollama:0.5.7 in cg-swarm-llm.
+
+POST /v1/tasks
+  {"id":"stage1-live-smoke",
+   "objective":"Explain why a local multi-agent swarm keeps agent prompts and
+                model weights on the same node.",
+   "workflow":"research_brief"}
+
+  200, wall time 12.715 s
+  status        completed
+  steps         5
+  duration_ms   12,712 (orchestrator-measured)
+  plan          ["Why do agents in a local multi-agent swarm need to share
+                  their prompts?",
+                 "What is the purpose of sharing model weights among agents?",
+                 "How does the shared prompt affect the communication between
+                  agents?"]
+  errors        []
+
+  turns (orchestrator-measured per call):
+    [plan/planner]              1,454 ms, 234 chars,  tools=[]
+    [gather/researcher]         3,566 ms, 1,052 chars, tools=[]
+    [gather/researcher]         2,255 ms, 483 chars, tools=[]
+    [gather/researcher]         2,036 ms, 345 chars, tools=[]
+    [synthesise/critic]         3,399 ms, 472 chars,  tools=[]
+
+  Inference-server view of the same run (Ollama GIN log):
+    POST /v1/chat/completions  200  2.895 s
+    POST /v1/chat/completions  200  3.682 s
+    POST /v1/chat/completions  200  1.590 s
+    POST /v1/chat/completions  200  1.639 s
+
+The planner reply arrived inside a ```json fence and was parsed correctly; the
+fan-out produced exactly three researcher delegations for three planned
+subtasks, and the critic synthesised them. The full run record is retained
+locally at runtime/stage1-live-run.json (gitignored).
+
+6. Budget enforcement (same stack, same model)
+----------------------------------------------
+POST /v1/tasks with constraints.max_steps = 4
+  200, wall time 9.811 s
+  status      budget_exhausted
+  steps       4
+  plan        3 subtasks
+  errors      ["step budget 4 exhausted before stage 'synthesise'"]
+
+Four model calls were spent on the plan plus three fan-out delegations, and the
+run stopped before synthesis instead of silently truncating the answer. This is
+the intended contract: the effective budget is the minimum of the task, the
+workflow and SWARM_MAX_STEPS.
+
+7. Defects found and fixed during verification
+----------------------------------------------
+- Root compose entrypoint failed to resolve: "service llm-runtime refers to
+  undefined volume model-weights". `extends` inherits volume references, so the
+  root file now declares the same top-level volumes and bridge network. `docker
+  compose config -q` from the repository root returns 0.
+- The task API did not consume the request body when it rejected a request for a
+  missing token. On a keep-alive connection the unread body was parsed as the
+  next request line ("Bad request version ..."), corrupting the following
+  request. The 401 and 404 paths now drain a bounded body (closing the
+  connection when the declared length exceeds 256 KiB), and a regression test
+  sends an unauthorized request followed by an authorized one on one
+  connection: 401 then 200, no parse error in the log.
+- Two unit-test expectations were wrong, not the code: `-3 + 7 % 4` is 0 (not
+  -2) and "Local models are private. They are also cheap." is 8 words (not 9).
+  The assertions were corrected.
+
+8. Teardown
+-----------
+docker compose --env-file .env -f docker/docker-compose.yml down
+  removed cg-swarm-orchestrator, cg-swarm-llm and the
+  cloudguard-llm-swarm-net bridge network; exit 0
+
+Named volumes cloudguard-llm-swarm-weights (397 MB model) and
+cloudguard-llm-swarm-state are retained. No container, port binding or
+background process from this project remains. The `.env` used for the run is
+gitignored.
+
+9. Not verified at Stage 1
+--------------------------
+- No OCI infrastructure exists. terraform/ holds the Stage 2 contract and no
+  .tf file; nothing has been planned or applied.
+- No model-quality claim. The smoke model is qwen2.5:0.5b because it fits a
+  laptop; its answers are shallow. Task success, latency and memory for a
+  production-sized model belong to Stage 4/5.
+- No concurrency or load test. The stack served one task at a time; fan-out is
+  sequential inside a single run loop.
+- No live tool invocation was observed: the smoke model never emitted a tool
+  request, so the calculator/text_stats gateway is covered by unit tests only,
+  not by a model-driven call.
+- The vLLM GPU override is syntax-validated only; this workstation has no GPU
+  and the image was not pulled.
+- The API is a loopback control plane with one shared bearer token. There is no
+  per-user identity, TLS termination or audit retention.
+
+10. CloudGuard registration
+---------------------------
+The project is indexed by the CloudGuard portfolio scanner and attached to its
+own repository metadata (slug 10-multi-agent-local-llm-swarm), then audited by
+the official portability service. The audit result is recorded in section 11 of
+this file after it runs; it is structural evidence only — leak-free, documented,
+isolated and runnable — and says nothing about cloud deployment or model
+quality.

@@ -1,0 +1,11 @@
+{
+  "id": "size-a-swarm-topology",
+  "objective": "Given four roles (planner, researcher, coder, critic) and one 3B model on a single node, decide whether parallel researcher fan-out reduces or increases wall-clock time.",
+  "workflow": "reasoning_chain",
+  "inputs": {
+    "parallelism": 2
+  },
+  "constraints": {
+    "max_steps": 10
+  }
+}

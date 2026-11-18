@@ -1,0 +1,110 @@
+# =============================================================================
+# Multi-Agent Local LLM Swarm — Git boundary
+# =============================================================================
+# This repository references local model weights, orchestrator tokens, agent
+# transcripts and (from Stage 2) cloud identifiers. None of that may enter Git.
+# Only source, prompt/config templates and synthetic task examples are tracked.
+
+# --- Environment and credentials ---------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+id_rsa*
+id_ed25519*
+id_ecdsa*
+*.ppk
+secrets/
+keys/
+credentials.json
+*service-account*.json
+application_default_credentials.json
+
+# --- Model weights and caches ------------------------------------------------
+# Ollama, vLLM and Hugging Face caches are stored in named Docker volumes or
+# outside the repository. If an operator ever exports one here, it stays local.
+models/
+model-cache/
+model-weights/
+ollama/
+ollama-models/
+.cache/
+.cache-huggingface/
+hf-cache/
+*.gguf
+*.ggml
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.engine
+*.plan
+*.ckpt
+*.msgpack
+*.h5
+
+# --- Agent state, transcripts and local databases ----------------------------
+state/
+runtime/
+agent-state/
+transcripts/
+sessions/
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+*.wal
+*.jsonl.tmp
+checkpoints/
+artifacts/
+incoming/
+
+# --- Logs and caches ---------------------------------------------------------
+logs/
+*.log
+*.pid
+*.sock
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# --- OpenTofu / Terraform ----------------------------------------------------
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+!terraform.tfvars.example
+crash.log
+crash.*.log
+*.tfplan
+
+# --- Container scratch -------------------------------------------------------
+docker/docker-compose.override.yml
+docker/*.local.*
+secrets.yaml
+secrets.yml
+
+# --- OS / editor noise -------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.code-workspace

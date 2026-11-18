@@ -1,0 +1,60 @@
+# =============================================================================
+# Optional GPU backend — vLLM OpenAI-compatible server
+# =============================================================================
+# Overrides the Ollama service with vLLM for a GPU node. It is not enabled by
+# default and is not exercised in Stage 1 (no GPU on the development host):
+#
+#   docker compose --env-file .env \
+#     -f docker/docker-compose.yml -f docker/compose.vllm.yaml up -d --build
+#
+# vLLM serves the OpenAI API under /v1, which is the same contract the
+# orchestrator uses for Ollama. Model weights are read from the shared
+# model-weights volume, so place a Hugging Face snapshot there first:
+#
+#   VLLM_MODEL_DIR=Qwen2.5-3B-Instruct
+#
+# Keep SWARM_LLM_MODEL equal to --served-model-name so agent requests resolve.
+
+services:
+  llm-runtime:
+    image: vllm/vllm-openai:v0.6.6
+
+    command:
+      - "--model"
+      - "/models/${VLLM_MODEL_DIR:-Qwen2.5-3B-Instruct}"
+      - "--served-model-name"
+      - "${SWARM_LLM_MODEL:-qwen2.5:3b-instruct}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "11434"
+      - "--max-model-len"
+      - "4096"
+      - "--gpu-memory-utilization"
+      - "0.90"
+
+    environment:
+      HF_HOME: /models/hf
+      TZ: ${TZ:-UTC}
+
+    volumes:
+      - model-weights:/models
+
+    healthcheck:
+      test:
+        - "CMD"
+        - "python3"
+        - "-c"
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:11434/health', timeout=5).status == 200 else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]

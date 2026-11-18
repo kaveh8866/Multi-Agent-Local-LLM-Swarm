@@ -1,0 +1,12 @@
+{
+  "id": "review-swarm-worker-auth",
+  "objective": "Review the orchestrator task API for authentication bypass, unbounded request sizes and token handling defects.",
+  "workflow": "code_review",
+  "inputs": {
+    "component": "src/swarm/worker.py"
+  },
+  "constraints": {
+    "max_steps": 8,
+    "allowed_tools": ["calculator"]
+  }
+}

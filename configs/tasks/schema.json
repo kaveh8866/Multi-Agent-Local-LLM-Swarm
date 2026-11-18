@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/kaveh8866/Multi-Agent-Local-LLM-Swarm/configs/tasks/schema.json",
+  "title": "Swarm task",
+  "description": "One unit of work submitted to POST /v1/tasks or `python -m swarm --task`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["objective", "workflow"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$",
+      "description": "Stable task identifier; generated when omitted."
+    },
+    "objective": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 4000,
+      "description": "What the swarm must produce. Normalised to single spaces."
+    },
+    "workflow": {
+      "type": "string",
+      "enum": ["research_brief", "code_review", "reasoning_chain"]
+    },
+    "inputs": {
+      "type": "object",
+      "description": "Free-form scalar inputs available to the workflow.",
+      "additionalProperties": { "type": ["string", "number", "boolean"] }
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_steps": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "description": "Lower bound applied on top of the workflow and global budgets."
+        },
+        "allowed_tools": {
+          "type": "array",
+          "items": { "enum": ["calculator", "text_stats"] },
+          "uniqueItems": true,
+          "description": "Further restricts the tools any persona may call for this task."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "id": "research-local-llm-serving",
+  "objective": "Compare Ollama and vLLM for serving a 3B parameter model on a CPU-only node, focusing on memory footprint, cold-start behaviour and operational surface.",
+  "workflow": "research_brief",
+  "inputs": {
+    "model_family": "qwen2.5",
+    "max_words": 400
+  },
+  "constraints": {
+    "max_steps": 8,
+    "allowed_tools": ["text_stats"]
+  }
+}

@@ -1,0 +1,28 @@
+# =============================================================================
+# OpenTofu variables — placeholder template (copy to terraform.tfvars)
+# =============================================================================
+# `terraform.tfvars` is gitignored. Never commit tenancy or compartment OCIDs,
+# key fingerprints or API key paths.
+#
+#   cp terraform/terraform.tfvars.example terraform/terraform.tfvars
+
+tenancy_ocid     = "ocid1.tenancy.oc1..replace-me"
+user_ocid        = "ocid1.user.oc1..replace-me"
+fingerprint      = "replace-with-api-key-fingerprint"
+private_key_path = "replace-with-path-to-oci-api-private-key"
+region           = "eu-frankfurt-1"
+compartment_ocid = "ocid1.compartment.oc1..replace-me"
+
+project_name     = "llm-swarm"
+ssh_public_key   = "ssh-ed25519 AAAAreplace-me operator@workstation"
+operator_cidr    = "203.0.113.10/32"
+
+# Inference node: a quantised 3B model needs roughly 3 GB resident, an 8B model
+# roughly 6–8 GB. Keep the free-tier-friendly Ampere shape as the default.
+inference_shape  = "VM.Standard.A1.Flex"
+inference_ocpus  = 4
+inference_memory_gb = 24
+
+# Persistent volume for model weights, agent state and run records.
+data_volume_size_gb = 200
+data_volume_mount   = "/mnt/llm-swarm"

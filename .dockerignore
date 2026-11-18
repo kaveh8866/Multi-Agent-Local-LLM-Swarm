@@ -1,0 +1,32 @@
+# Build context hygiene: the worker image needs pyproject.toml, README.md,
+# src/ and configs/ only. Everything below stays out of the image.
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+storage/
+state/
+runtime/
+logs/
+docs/
+tests/
+terraform/
+docker/
+**/__pycache__
+**/*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.gguf
+*.ggml
+*.bin
+*.safetensors
+*.db
+*.sqlite
+*.sqlite3
+*.log
+.DS_Store
+Thumbs.db

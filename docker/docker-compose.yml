@@ -1,0 +1,174 @@
+# =============================================================================
+# Multi-Agent Local LLM Swarm — canonical runtime composition
+# =============================================================================
+# Two services share one bridge network:
+#   llm-runtime        local inference server (Ollama, OpenAI-compatible /v1)
+#   swarm-orchestrator planner -> delegated agents -> synthesis, task API :8080
+#
+# Sizing assumes a high-memory CPU node (Stage 2 provisions an OCI Flex shape
+# with a persistent block volume). Limits are a ceiling, not a reservation;
+# lower them for a laptop.
+#
+# Hardening rationale:
+#   no-new-privileges   no setuid escalation in either container
+#   cap_drop: ALL       neither service needs a Linux capability
+#   read_only + tmpfs   immutable rootfs for the stateless orchestrator
+#   pids_limit          a runaway agent cannot fork-bomb the host
+#   loopback publishing both ports bind 127.0.0.1 only
+#   log rotation        20 MiB x 3 files per container, never unbounded
+#   named volumes       model weights and agent state never touch the checkout
+#
+# Workflow:
+#   cp .env.example .env
+#   docker compose --env-file .env -f docker/docker-compose.yml up -d --build
+#   docker compose --env-file .env -f docker/docker-compose.yml \
+#     exec llm-runtime ollama pull qwen2.5:3b-instruct
+#
+# The root docker-compose.yml extends these services for repository-root
+# discovery; docker/ remains the canonical definition.
+
+name: cloudguard-llm-swarm
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
+x-swarm-env: &swarm-env
+  SWARM_LLM_BASE_URL: ${SWARM_LLM_BASE_URL:-http://llm-runtime:11434}
+  SWARM_LLM_MODEL: ${SWARM_LLM_MODEL:-qwen2.5:3b-instruct}
+  SWARM_LLM_API_KEY: ${SWARM_LLM_API_KEY:-}
+  SWARM_LLM_TIMEOUT_SECONDS: ${SWARM_LLM_TIMEOUT_SECONDS:-120}
+  SWARM_ORCHESTRATOR_TOKEN: ${SWARM_ORCHESTRATOR_TOKEN:?SWARM_ORCHESTRATOR_TOKEN is required - copy .env.example to .env}
+  SWARM_SERVER_PORT: ${SWARM_SERVER_PORT:-8080}
+  SWARM_MAX_AGENTS: ${SWARM_MAX_AGENTS:-4}
+  SWARM_MAX_STEPS: ${SWARM_MAX_STEPS:-12}
+  SWARM_TASK_TIMEOUT_SECONDS: ${SWARM_TASK_TIMEOUT_SECONDS:-300}
+  SWARM_TEMPERATURE: ${SWARM_TEMPERATURE:-0.2}
+  SWARM_CONFIG_DIR: /app/configs
+  SWARM_STATE_DIR: /app/state
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  TZ: ${TZ:-UTC}
+
+services:
+  llm-runtime:
+    image: ollama/ollama:0.5.7
+    container_name: cg-swarm-llm
+    restart: unless-stopped
+
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      # Keep the model resident between delegated turns; reloading a 3B model
+      # per agent turn dominates latency on CPU.
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-10m}
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-1}
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-2}
+      OLLAMA_MODELS: /models
+      TZ: ${TZ:-UTC}
+
+    volumes:
+      # Model weights survive image rebuilds and container replacement. Named
+      # volumes are outside the checkout by construction, so weights can never
+      # be committed.
+      - model-weights:/models
+      # Reference Modelfile for the swarm system prompt (never auto-applied).
+      - ./ollama/Modelfile.swarm:/config/Modelfile.swarm:ro
+
+    ports:
+      # Operator surface. Never publish 11434 on 0.0.0.0 without a firewall.
+      - "127.0.0.1:${OLLAMA_PORT:-11434}:11434"
+
+    healthcheck:
+      # `ollama list` proves the daemon answers; it does not require a model.
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+    # --- resource envelope (high-RAM CPU profile) --------------------------
+    mem_limit: ${OLLAMA_MEM_LIMIT:-12g}
+    memswap_limit: ${OLLAMA_MEM_LIMIT:-12g}
+    cpus: ${OLLAMA_CPUS:-6}
+    pids_limit: 1024
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    # The daemon writes blobs and manifests into /models, so its rootfs stays
+    # writable; every other hardening flag still applies.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    logging: *default-logging
+    stop_grace_period: 30s
+
+  swarm-orchestrator:
+    build:
+      context: ..
+      dockerfile: docker/worker/Dockerfile
+    image: cloudguard/llm-swarm:local
+    container_name: cg-swarm-orchestrator
+    restart: unless-stopped
+
+    command:
+      - "-m"
+      - "swarm.worker"
+
+    environment: *swarm-env
+
+    volumes:
+      # Personas, prompts, workflows and task schemas are read-only at runtime.
+      - ../configs:/app/configs:ro
+      # Run records and agent checkpoints (gitignored; named volume).
+      - swarm-state:/app/state
+
+    ports:
+      - "127.0.0.1:${SWARM_PORT:-8090}:${SWARM_SERVER_PORT:-8080}"
+
+    depends_on:
+      llm-runtime:
+        condition: service_healthy
+
+    # /health proves the process and config are loaded. /ready additionally
+    # probes the inference server, so a model swap does not restart the worker
+    # and abort in-flight runs.
+    healthcheck:
+      test: ["CMD", "python", "-m", "swarm", "--healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+
+    mem_limit: ${WORKER_MEM_LIMIT:-2g}
+    memswap_limit: ${WORKER_MEM_LIMIT:-2g}
+    cpus: ${WORKER_CPUS:-2}
+
+    logging: *default-logging
+    stop_grace_period: 20s
+
+networks:
+  default:
+    name: cloudguard-llm-swarm-net
+    driver: bridge
+
+volumes:
+  # Model weights (Ollama blobs/manifests, or a vLLM HF cache).
+  model-weights:
+    name: cloudguard-llm-swarm-weights
+  # Agent state: run records, checkpoints and transcripts.
+  swarm-state:
+    name: cloudguard-llm-swarm-state

@@ -1,0 +1,129 @@
+# =============================================================================
+# Workflow definitions
+# =============================================================================
+# A workflow is an ordered list of stages. The first stage must run the entry
+# persona and produces the plan; later stages either run once (mode: single) or
+# once per planned subtask (mode: fanout).
+#
+# Placeholders available in every instruction:
+#   {objective}   normalised task objective
+#   {subtask}     the planned subtask for this delegation (fanout) or objective
+#   {plan_text}   the full plan as a flat list
+#   {max_tasks}   workflow.max_tasks
+#
+# max_steps caps model calls for the run; the effective budget is the lowest of
+# workflow.max_steps, task.constraints.max_steps and SWARM_MAX_STEPS.
+
+version: 1
+
+workflows:
+  research_brief:
+    description: Plan a research brief, gather findings per subtask, then synthesise a cited summary.
+    entry: planner
+    max_steps: 8
+    max_tasks: 3
+    stages:
+      - id: plan
+        persona: planner
+        mode: single
+        instruction: |
+          Objective: {objective}
+
+          Break the objective into at most {max_tasks} independent research
+          questions. Each question must be answerable without another agent's
+          output. Reply with a JSON array of short strings and nothing else.
+
+      - id: gather
+        persona: researcher
+        mode: fanout
+        instruction: |
+          Overall objective: {objective}
+          Research question: {subtask}
+
+          Produce concise findings in at most 120 words. State assumptions
+          explicitly and do not claim a measurement that is not in the
+          transcript.
+
+      - id: synthesise
+        persona: critic
+        mode: single
+        instruction: |
+          Objective: {objective}
+
+          Using only the findings in the transcript, produce the final brief:
+          one paragraph answering the objective, three supporting points, and
+          the open questions that remain. Flag any claim not supported by the
+          gathered findings.
+
+  code_review:
+    description: Plan review angles, review the change from each angle, then aggregate blocking findings.
+    entry: planner
+    max_steps: 8
+    max_tasks: 3
+    stages:
+      - id: plan
+        persona: planner
+        mode: single
+        instruction: |
+          Review target: {objective}
+
+          List at most {max_tasks} independent review angles (for example
+          correctness, security, operability). Reply with a JSON array of short
+          strings and nothing else.
+
+      - id: review
+        persona: coder
+        mode: fanout
+        instruction: |
+          Review target: {objective}
+          Review angle: {subtask}
+
+          Report concrete defects with the file or behaviour they affect. Use
+          the calculator tool for any arithmetic instead of estimating. If the
+          angle finds nothing, say so in one sentence.
+
+      - id: verdict
+        persona: critic
+        mode: single
+        instruction: |
+          Review target: {objective}
+
+          Aggregate the review into blocking findings, non-blocking findings and
+          a one-line verdict. Reject any finding that the transcript does not
+          support.
+
+  reasoning_chain:
+    description: Decompose a hard question, reason over each part, then verify the chain for gaps.
+    entry: planner
+    max_steps: 10
+    max_tasks: 4
+    stages:
+      - id: plan
+        persona: planner
+        mode: single
+        instruction: |
+          Question: {objective}
+
+          Decompose the question into at most {max_tasks} reasoning steps that
+          can be evaluated in order. Reply with a JSON array of short strings
+          and nothing else.
+
+      - id: reason
+        persona: researcher
+        mode: fanout
+        instruction: |
+          Question: {objective}
+          Reasoning step: {subtask}
+
+          Resolve this step in at most 100 words. Name the evidence or
+          assumption each conclusion depends on.
+
+      - id: verify
+        persona: critic
+        mode: single
+        instruction: |
+          Question: {objective}
+
+          Verify the reasoning chain in the transcript: identify unsupported
+          steps, contradictions and missing evidence, then give the best
+          supported answer with its confidence.

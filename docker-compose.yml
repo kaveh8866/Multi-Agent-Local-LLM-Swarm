@@ -1,0 +1,44 @@
+# =============================================================================
+# Root Compose entrypoint — CloudGuard / repository tooling
+# =============================================================================
+# The canonical services, hardening flags and resource envelopes live in
+# docker/docker-compose.yml. This thin root file lets a reviewer, CI job or the
+# CloudGuard portability audit discover and run the swarm from the repository
+# root without duplicating service definitions.
+#
+# Canonical workflow (see README):
+#   docker compose --env-file .env -f docker/docker-compose.yml up -d --build
+#
+# Equivalent from the repository root:
+#   docker compose --env-file .env up -d --build
+#
+# Profiles: `--profile gpu` layers docker/compose.vllm.yaml over the Ollama
+# backend. It is not enabled by default and is not exercised in Stage 1.
+
+name: cloudguard-llm-swarm
+
+services:
+  llm-runtime:
+    extends:
+      file: docker/docker-compose.yml
+      service: llm-runtime
+    image: ollama/ollama:0.5.7
+
+  swarm-orchestrator:
+    extends:
+      file: docker/docker-compose.yml
+      service: swarm-orchestrator
+    image: cloudguard/llm-swarm:local
+
+# `extends` inherits the volume references, so the same top-level volumes and
+# network must be declared here for the root project to resolve.
+volumes:
+  model-weights:
+    name: cloudguard-llm-swarm-weights
+  swarm-state:
+    name: cloudguard-llm-swarm-state
+
+networks:
+  default:
+    name: cloudguard-llm-swarm-net
+    driver: bridge
