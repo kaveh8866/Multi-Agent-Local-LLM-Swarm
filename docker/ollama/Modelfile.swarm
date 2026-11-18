@@ -1,0 +1,39 @@
+# =============================================================================
+# Swarm reference model — Ollama Modelfile
+# =============================================================================
+# Optional: pins the sampling parameters and the shared system preamble for a
+# local swarm model. It is mounted at /config/Modelfile.swarm and is never
+# applied automatically.
+#
+#   docker compose --env-file .env -f docker/docker-compose.yml \
+#     exec llm-runtime ollama pull qwen2.5:3b-instruct
+#   docker compose --env-file .env -f docker/docker-compose.yml \
+#     exec llm-runtime ollama create swarm-agent -f /config/Modelfile.swarm
+#
+# Then set SWARM_LLM_MODEL=swarm-agent in .env.
+#
+# Keep the context window small enough to fit the node's RAM: a 3B model at
+# 4096 tokens needs roughly 3 GB resident on CPU.
+
+FROM qwen2.5:3b-instruct
+
+PARAMETER temperature 0.2
+PARAMETER top_p 0.9
+PARAMETER repeat_penalty 1.05
+PARAMETER num_ctx 4096
+PARAMETER stop "<|im_end|>"
+
+SYSTEM """
+You are one agent inside a local multi-agent swarm. You are given a persona, a
+narrow instruction and the transcript of prior turns.
+
+Rules:
+1. Answer only from the information in the transcript and the task; state an
+   assumption explicitly instead of inventing a fact.
+2. Stay inside your assigned role. Delegation is the orchestrator's job, not
+   yours.
+3. Be concise. Prefer short paragraphs or flat lists; no preamble.
+4. When arithmetic is required, request the calculator tool instead of doing
+   mental math.
+5. If the instruction cannot be completed, say what is missing in one sentence.
+"""

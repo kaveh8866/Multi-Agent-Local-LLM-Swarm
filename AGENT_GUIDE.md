@@ -463,11 +463,11 @@ or implied.
 | 4 | Local evaluation: task success, latency, memory | 3/3 workflows completed on `qwen2.5:3b-instruct`, measured latency/throughput/CPU/RAM, clean log audit — **done** (`docs/stage-4-verification.txt`) |
 | 5 | Live OCI deployment | healthy host, block volume consumed by the stack, 3/3 workflows on the host — **done** (`docs/stage-5-verification.txt`) |
 | 6 | Clean teardown and zero-resource verification | stacks down, `tofu destroy` 8/8, empty state, provider inventory clean — **done** (`docs/stage-6-verification.txt`) |
-| 7 | Scale and recovery | load test, restart/recovery drill |
-| 8 | Security audit, documentation, cost model | zero-leak audit signed off |
+| 7 | Security audit, documentation, cost model | zero-leak audit signed off, README and cost table published — **done** (`docs/stage-7-security-audit.txt`) |
+| 8 | Scale and recovery | load test, restart/recovery drill |
 
 > Distributed fan-out and queueing across nodes was originally pencilled in as
-> Stage 3; it moved to Stage 7 (scale) so the documentation stage keeps its
+> Stage 3; it moved to Stage 8 (scale) so the documentation stage keeps its
 > original place in the roadmap.
 
 ## 16. Handoff checklist

@@ -1,0 +1,292 @@
+================================================================================
+Project 10 — Multi-Agent Local LLM Swarm
+Stage 7 — Security Audit, Documentation & Cost Model
+Zero-leak / sanitization audit and sign-off
+Date: 2026-11-18
+Auditor: agent, on the operator's workstation (read-only except the one fix below)
+Scope: the project directory, its Git index, its ignore rules, its container
+       build context and the Stage 4/5 runtime logs already captured locally
+Raw transcript: runtime/stage7-audit.log (gitignored)
+================================================================================
+
+RESULT
+------
+The tracked tree contains no model weights, no private keys, no Terraform state,
+no `.env` file, no database, no log and no cloud OCID value. 63 files were tracked
+at audit time — 64 once `Modelfile.swarm` from §6 is tracked, 65 including this
+audit record — 437 KB in total, the largest file 24 KB.
+Every sensitive artefact that exists on the workstation is ignored, verified with
+`git check-ignore -v` rather than by eye.
+
+One real defect was found and fixed: an unanchored `ollama/` ignore rule was
+hiding `docker/ollama/Modelfile.swarm`, a documentation-bearing template that the
+README referenced but that Git had never tracked.
+
+Five residual risks are recorded in §9. None of them is a leak; they are
+architectural limits already stated in the README, repeated here so the sign-off
+is not narrower than the project.
+
+--------------------------------------------------------------------------------
+1. METHOD
+--------------------------------------------------------------------------------
+Five independent checks, because each one catches something the others do not:
+
+  A. index scan          — what Git would actually publish
+  B. ignore verification — whether the boundary is active for the paths present
+  C. content scan        — secret-shaped strings inside tracked files
+  D. template review     — whether `.env.example` holds placeholders only
+  E. build + runtime     — what leaves the image and what reached the logs
+
+The distinction matters: a file can be ignored yet still tracked from history, and
+a path can be tracked while its parent directory looks ignored. Both happened
+here (§6) and only the paired checks exposed it.
+
+--------------------------------------------------------------------------------
+2. INDEX SCAN — WHAT GIT WOULD PUBLISH
+--------------------------------------------------------------------------------
+  $ git ls-files | wc -l
+  63
+
+  $ git ls-files | grep -nE '(^|/)\.env($|\.)|\.pem$|\.key$|\.p12$|\.pfx$|id_rsa|
+      id_ed25519|\.tfstate|\.tfvars$|\.gguf$|\.ggml$|\.safetensors$|\.bin$|\.pt$|
+      \.onnx$|\.log$|\.db$|\.sqlite|rclone\.conf|credentials\.json|service-account'
+  2:.env.example
+
+Exactly one match, and it is the template that is supposed to be tracked. No
+second file: no `.env`, no `.env.local`, no key, no state, no weight blob.
+
+  $ git ls-files -z | xargs -0 du -ck | tail -1
+  437     total
+
+  $ git ls-files -z | xargs -0 du -k | sort -rn | head -4
+  24  AGENT_GUIDE.md
+  20  scripts/verify_local.py
+  20  docs/stage-6-verification.txt
+  20  README.md
+
+437 KB total and a 24 KB maximum is the strongest single signal here: a quantised
+3B model is ~1.9 GB and a `.gguf`/`.safetensors` blob cannot hide inside a
+437 KB tree. There is no binary artefact of any kind in the index.
+
+Composition: 17 `.tf`, 12 `.py`, 8 `.md`, 6 `.txt`, 4 `.yaml`, 4 `.json`,
+2 `.yml`, 2 `.example` — source, configuration templates and evidence, nothing else.
+
+--------------------------------------------------------------------------------
+3. IGNORE VERIFICATION — THE BOUNDARY IS ACTIVE
+--------------------------------------------------------------------------------
+Every sensitive path that exists locally was tested individually. A bare
+`.gitignore` entry proves intent; this proves effect:
+
+  $ git check-ignore -v .env
+  .gitignore:9:.env                                     .env
+  $ git check-ignore -v .env.local
+  .gitignore:10:.env.*                                  .env.local
+  $ git check-ignore -v terraform/terraform.tfvars
+  .gitignore:94:*.tfvars                                terraform/terraform.tfvars
+  $ git check-ignore -v terraform/terraform.tfstate
+  .gitignore:92:*.tfstate                               terraform/terraform.tfstate
+  $ git check-ignore -v terraform/terraform.tfstate.backup
+  .gitignore:93:*.tfstate.*                             terraform/terraform.tfstate.backup
+  $ git check-ignore -v terraform/stage6-destroy.tfplan
+  .gitignore:99:*.tfplan                                terraform/stage6-destroy.tfplan
+  $ git check-ignore -v runtime/stage7-audit.log
+  .gitignore:57:runtime/                                runtime/stage7-audit.log
+  $ git check-ignore -v weights.gguf
+  .gitignore:42:*.gguf                                  weights.gguf
+  $ git check-ignore -v model.bin
+  .gitignore:44:*.bin                                   model.bin
+  $ git check-ignore -v state/run.db
+  .gitignore:56:state/                                  state/run.db
+  $ git check-ignore -v logs/swarm.log
+  .gitignore:73:logs/                                   logs/swarm.log
+
+Local material present but absent from the index (`git status --porcelain
+--ignored`):
+
+  .env
+  runtime/
+  terraform/terraform.tfstate, terraform.tfstate.backup
+  terraform/terraform.tfvars
+  terraform/stage2.tfplan, stage5.tfplan, stage6-destroy.tfplan
+  terraform/.terraform/
+  scripts/__pycache__/, src/swarm/__pycache__/, tests/__pycache__/
+
+That is the intended end state: the operator keeps a working `.env`, real tfvars,
+state and evidence logs on disk; Git sees none of it.
+
+--------------------------------------------------------------------------------
+4. CONTENT SCAN — SECRET-SHAPED STRINGS INSIDE TRACKED FILES
+--------------------------------------------------------------------------------
+A file can be safe by name and dangerous by content, so tracked text was scanned
+for OCIDs, private-key blocks and common token prefixes:
+
+  $ git grep -nIE "ocid1\.(tenancy|user|compartment|instance|vcn)|
+      BEGIN [A-Z ]*PRIVATE KEY|ghp_[A-Za-z0-9]{20,}|AKIA[A-Z0-9]{16}|
+      sk-[A-Za-z0-9]{20,}" -- .
+  MANUAL_PREREQS.md:93:   | Tenancy OCID | ... | `ocid1.tenancy.oc1..…` |
+  MANUAL_PREREQS.md:114:  user=ocid1.user.oc1..replace-me
+  MANUAL_PREREQS.md:116:  tenancy=ocid1.tenancy.oc1..replace-me
+  terraform/terraform.tfvars.example:17: tenancy_ocid     = "ocid1.tenancy.oc1..replace-with-your-tenancy-ocid"
+  terraform/terraform.tfvars.example:18: compartment_ocid = "ocid1.compartment.oc1..replace-with-your-compartment-ocid"
+
+Five matches, all documentation placeholders inside `MANUAL_PREREQS.md` and
+`terraform.tfvars.example`. Each one is an ellipsis, `replace-me` or
+`replace-with-your-...`: illustrative shapes, not values. The real tenancy,
+compartment, instance, volume and attachment OCIDs live only in
+`terraform/terraform.tfvars` and `terraform.tfstate`, both ignored (§3), and were
+never copied into a doc — the Stage 5 and 6 evidence files reference the public IP
+and display names only.
+
+Zero private-key blocks, zero GitHub/AWS/OpenAI token shapes, zero webhook URLs.
+
+--------------------------------------------------------------------------------
+5. TEMPLATE REVIEW — `.env.example`
+--------------------------------------------------------------------------------
+  $ grep -cE '^[A-Z_]+=' .env.example
+  25
+  $ grep -E '^SWARM_ORCHESTRATOR_TOKEN=|^SWARM_LLM_API_KEY=' .env.example
+  SWARM_LLM_API_KEY=replace-with-local-llm-api-key-if-proxied
+  SWARM_ORCHESTRATOR_TOKEN=replace-with-local-orchestrator-token
+
+25 keys, every secret-bearing one a self-describing placeholder. The template is
+tracked deliberately (`!.env.example` negation in `.gitignore`), carries the host
+paths for the OCI overlay and the container envelopes, and states that the token
+must be rotated before the API is reachable from anything but loopback. The real
+`.env` on this workstation is a different file, mode-restricted and ignored.
+
+`.gitignore` structure, section by section: environment and credentials, model
+weights and caches, agent state and databases, logs and caches, OpenTofu state and
+tfvars, container scratch, OS/editor noise — every class in the CloudGuard boundary
+rules has a rule, with template negations for `.env.example` and
+`terraform.tfvars.example`. `.dockerignore` additionally strips `.env`, `runtime/`,
+`terraform/`, `docs/`, `tests/`, weights and logs from the image build context
+(8 exclusion rules matched).
+
+--------------------------------------------------------------------------------
+6. DEFECT FOUND AND FIXED — AN IGNORE RULE THAT HID A TRACKED TEMPLATE
+--------------------------------------------------------------------------------
+The `.gitignore` model-weights section contained an unanchored directory rule:
+
+  ollama/
+
+Git treats that as "any directory named `ollama`, at any depth", so it also
+matched `docker/ollama/` — which holds `Modelfile.swarm`, the optional pinned
+sampling parameters and shared system preamble that both the README and
+`MANUAL_PREREQS.md` tell an operator to run with `ollama create -f`. The file was
+therefore never tracked, while documentation kept pointing at it: a broken
+reference that a name-based scan cannot see, because the *directory* is what shows
+as ignored.
+
+  before:  git check-ignore -v docker/ollama/Modelfile.swarm
+           .gitignore:34:ollama/        docker/ollama/Modelfile.swarm
+  after:   git check-ignore -v docker/ollama/Modelfile.swarm
+           (no output — not ignored)
+
+Fix: anchor the rule to the checkout root (`/ollama/`), so a root-level Ollama
+data directory is still ignored while a source-controlled `docker/ollama/` is not.
+`Modelfile.swarm` was reviewed before being added — it contains a `FROM` line,
+sampling parameters and a system preamble, no credential — and is now tracked.
+
+This is the only code or configuration change this audit made. Everything else is
+read-only inspection.
+
+--------------------------------------------------------------------------------
+7. BUILD CONTEXT AND CONTAINER HARDENING
+--------------------------------------------------------------------------------
+  $ docker compose --env-file .env -f docker/docker-compose.yml config |
+      grep -E "cap_drop|read_only|no-new-privileges|pids_limit|max-size|127.0.0.1"
+  cap_drop:                (both services)
+  - no-new-privileges:true (both services)
+  read_only: true          (orchestrator; llama runtime keeps a writable /models)
+  pids_limit: 1024 / 256   (runtime / orchestrator)
+  max-size: 20m            (both, 3 files)
+  host_ip: 127.0.0.1       (both published ports)
+
+The worker image therefore cannot gain capabilities, cannot write outside its
+declared mounts, cannot fork-bomb the host and cannot fill the disk with logs. Both
+ports are bound to loopback, so even on a host with a permissive firewall the API
+is not reachable from the network without a deliberate change.
+
+`docker build` uses `.dockerignore`, not `.gitignore`; the 8 matched rules mean the
+image build context excludes `.env`, `runtime/`, `terraform/`, `docs/`, `tests/`,
+`*.gguf`, `*.bin`, `*.safetensors`, `*.log` — so a local secret cannot be baked
+into a layer even by accident.
+
+--------------------------------------------------------------------------------
+8. RUNTIME LOG AUDIT (from Stages 4–5, re-read here)
+--------------------------------------------------------------------------------
+  Stage 4: 416 log lines — 0 orchestrator-token occurrences, 0 key-shaped strings
+  Stage 5: 337 log lines — 0 token occurrences, 0 Authorization header lines,
+           0 sk-/AKIA/ghp_/PEM/OCID matches
+
+The worker logs request lines without headers, so the bearer token never reaches
+stdout. The host `.env` was mode 600 and outside Git; the workstation's
+`runtime/remote.env` is gitignored. This audit re-read the same captured logs and
+found the same result — it did not regenerate them, and the containers that wrote
+them no longer exist (Stage 6).
+
+--------------------------------------------------------------------------------
+9. RESIDUAL RISKS (accepted, documented, not leaks)
+--------------------------------------------------------------------------------
+  R-1  No TLS on the control plane. The task API is plain HTTP with a bearer
+       token; it is loopback-bound and reached through an SSH tunnel. A public
+       exposure of port 8090 would be a real finding — the security list and the
+       loopback bind are both required to keep this accepted.
+  R-2  Shared bearer token, no per-user identity or audit trail. One token grants
+       the whole swarm. Rotation means editing `.env` and recreating the worker;
+       there is no revocation list.
+  R-3  Ollama's own API is unauthenticated by default. `SWARM_LLM_API_KEY` only
+       helps behind a proxy; here the port is loopback-bound, so the orchestrator
+       is the only client.
+  R-4  Run records are not persisted to the state volume, so there is no durable
+       audit log of agent turns beyond container logs (which are rotated at
+       20 MiB × 3).
+  R-5  The vLLM GPU override and the AWS/GCP ports are unexecuted. Unvalidated
+       paths can hide defects that a document review cannot find; they are labelled
+       as unexecuted everywhere they appear.
+
+No weight, key, state, `.env`, database, log or real OCID is tracked. That is the
+zero-leak claim, and it is verified above rather than asserted.
+
+--------------------------------------------------------------------------------
+10. REPRODUCE
+--------------------------------------------------------------------------------
+  cd projects/10-multi-agent-local-llm-swarm
+
+  git ls-files | wc -l
+  git ls-files | grep -E '(^|/)\.env($|\.)|\.pem$|\.tfstate|\.tfvars$|\.gguf$|\.bin$|\.log$|\.db$'
+  git ls-files -z | xargs -0 du -ck | tail -1
+  git check-ignore -v .env terraform/terraform.tfvars terraform/terraform.tfstate
+  git grep -nIE "ocid1\.(tenancy|user|compartment|instance|vcn)|BEGIN [A-Z ]*PRIVATE KEY"
+  grep -cE '^[A-Z_]+=' .env.example
+  docker compose --env-file .env -f docker/docker-compose.yml config -q
+
+Exit criteria: only `.env.example` matches the filename scan; total tracked size in
+the hundreds of KB; every sensitive path ignored; content matches are placeholders
+only; compose resolves.
+
+--------------------------------------------------------------------------------
+11. DOCUMENTATION AND COST DELIVERABLES OF THIS STAGE
+--------------------------------------------------------------------------------
+  README.md   rewritten: badges, overview, feature matrix, the end-to-end
+              architecture diagram (task → orchestrator/swarm → OCI compute +
+              block storage → local LLM runtime → collaborative output), persona
+              configuration, workflow and backend guides, security posture,
+              the certification statement, migration tables for AWS and GCP, the
+              cross-cloud cost/benchmark table, verified results, honest limits.
+  Cost table  OCI A2.Flex 4 OCPU/24 GB $84.42/mo · OCI A1 Always Free $0.00
+              (capacity-blocked) · AWS t3.xlarge $137.47/mo · AWS c6g.xlarge
+              $115.28/mo · GCP e2-standard-4 $117.84/mo — list prices checked
+              2026-11-18, 730 h, 200 GB disk, excluding VAT and egress, with the
+              per-unit derivation shown and RAM-parity upsizing called out.
+  terraform/README.md  status corrected: the contract is no longer "planned, not
+              applied" — it was applied in Stage 5 and destroyed in Stage 6.
+
+================================================================================
+SIGN-OFF
+Zero-leak audit: PASS. 63 tracked files at audit time, 65 after this stage's two
+additions (Modelfile.swarm, this record), 437 KB, zero sensitive artefacts in the index, every sensitive local path verified
+ignored, zero secret-shaped values in tracked content beyond documentation
+placeholders. One ignore-rule defect found and fixed. Five residual risks accepted
+and documented. Stage 7 documentation and cost model published.
+================================================================================

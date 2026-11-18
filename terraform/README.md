@@ -1,9 +1,12 @@
 # OpenTofu — OCI infrastructure for the multi-agent swarm
 
-Status: **validated and planned, not applied.** `tofu fmt -check` and
-`tofu validate` pass, and a read-only plan reports 8 resources to add. No
-resource exists in OCI, and therefore no state file exists. Evidence:
-[`../docs/stage-2-verification.txt`](../docs/stage-2-verification.txt).
+Status: **applied in Stage 5, destroyed in Stage 6.** `tofu fmt -check` and
+`tofu validate` pass; the contract was then applied to a live OCI tenancy (8
+resources), and later torn down (8 destroyed, empty state). Nothing exists in OCI
+today. Evidence: [`../docs/stage-2-verification.txt`](../docs/stage-2-verification.txt)
+(plan), [`../docs/stage-5-verification.txt`](../docs/stage-5-verification.txt)
+(apply), [`../docs/stage-6-verification.txt`](../docs/stage-6-verification.txt)
+(destroy).
 
 ## What it provisions
 
@@ -98,8 +101,9 @@ to `oci_core_volume.llm` and remove it deliberately for teardown.
 
 The volume layout prepared by cloud-init is `models/` (root, Ollama weights),
 `cache/` (root, inference cache) and `state/` (uid 10001, agent run records).
-Stage 5 adds the Compose override that bind-mounts those paths instead of named
-volumes; that wiring is not verified yet.
+Stage 5 added `docker/compose.oci.yaml`, which bind-mounts `models/` and `state/`
+from the volume; the run proved the weights lived there (`du -sh /models` → 1.8 G
+matching `df` on `/mnt/llm-swarm`) and survived a reboot with no manual step.
 
 ## Cost note
 
@@ -117,7 +121,7 @@ The variable/output contract is provider neutral. Porting means replacing
 | Contract | OCI (implemented) | AWS | GCP |
 | --- | --- | --- | --- |
 | Network | VCN, IGW, route table, security list, subnet | VPC, IGW, route table, security group, subnet | VPC network, firewall rule, subnetwork |
-| Compute | `oci_core_instance` A1.Flex | `aws_instance` t4g.xlarge | `google_compute_instance` t2a-standard-4 |
+| Compute | `oci_core_instance` A1.Flex (A2.Flex in the Stage 5 run) | `aws_instance` t4g.xlarge | `google_compute_instance` t2a-standard-4 |
 | Storage | `oci_core_volume` + attachment | `aws_ebs_volume` (gp3) + attachment | `google_compute_disk` (pd-balanced) + attached disk |
 | Bootstrap | `metadata.user_data` (base64) | `user_data` | `metadata_startup_script` |
 | State | OCI Object Storage S3-compatible backend | S3 + DynamoDB lock | GCS |

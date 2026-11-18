@@ -31,7 +31,10 @@ application_default_credentials.json
 models/
 model-cache/
 model-weights/
-ollama/
+# Anchored: an unanchored `ollama/` also swallowed docker/ollama/, which holds the
+# tracked Modelfile.swarm template. Only a checkout-root Ollama data directory
+# is ignored here.
+/ollama/
 ollama-models/
 .cache/
 .cache-huggingface/
