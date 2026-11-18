@@ -404,6 +404,13 @@ Before a real model lands on the block volume, add
 up run records, then `tofu plan -destroy` → operator approval → `tofu destroy` →
 `tofu state list` (empty).
 
+**Executed for this project (Stage 6, 2026-11-18).** Both Compose stacks were
+stopped, `tofu destroy` reported `8 destroyed`, the state is empty at serial 67,
+and a read-only provider inventory returned zero live project-owned resources.
+No volume backup was taken, so the pulled weights went with the volume; a future
+teardown that should preserve them needs a volume backup first. Evidence:
+[`docs/stage-6-verification.txt`](docs/stage-6-verification.txt).
+
 ## 15. Troubleshooting
 
 | Symptom | Likely cause | Fix |

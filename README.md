@@ -5,7 +5,7 @@
 ![Docker](https://img.shields.io/badge/packaging-Docker%20Compose-2496ED?logo=docker&logoColor=white)
 ![OpenTofu](https://img.shields.io/badge/IaC-OpenTofu%20(Stage%202%E2%80%935)-844FBA?logo=opentofu&logoColor=white)
 ![OCI](https://img.shields.io/badge/certified%20on-OCI-F80000?logo=oracle&logoColor=white)
-![Stage](https://img.shields.io/badge/stage-5%20%C2%B7%20live%20on%20OCI-blue)
+![Stage](https://img.shields.io/badge/stage-6%20%C2%B7%20torn%20down-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 A containerized **multi-agent swarm** that runs entirely on local language
@@ -30,6 +30,9 @@ persistent block volume for model weights and agent state.
 > Always Free A1 shape reported "out of host capacity" in all three Frankfurt
 > ADs after 45 attempts, so the deployment uses **A2.Flex 4 OCPU / 24 GB**
 > (AmpereOne, trial credit) instead; that deviation is documented, not hidden.
+> Stage 6 stops both stacks and destroys that infrastructure back to zero — 8/8
+> resources, empty state, clean provider inventory
+> ([`docs/stage-6-verification.txt`](docs/stage-6-verification.txt)).
 > Stage 3 adds the operator checklist and agent playbook; Stage 4 verifies the
 > stack locally on `qwen2.5:3b-instruct`
 > ([`docs/stage-4-verification.txt`](docs/stage-4-verification.txt)). No
@@ -48,7 +51,7 @@ persistent block volume for model weights and agent state.
 | Tools | `calculator`, `text_stats` | Deterministic, side-effect-free, AST-validated; no shell and no filesystem |
 | Task contract | JSON Schema (`configs/tasks/schema.json`) | Tasks are validated before a model is called |
 | Packaging | Docker Compose, hardened containers | Read-only orchestrator rootfs, `cap_drop: ALL`, `no-new-privileges`, resource envelopes |
-| Infrastructure | OpenTofu (applied in Stage 5) | OCI VCN + security list + Ampere ARM compute + 200 GB block volume, live in `eu-frankfurt-1` |
+| Infrastructure | OpenTofu (applied in Stage 5, destroyed in Stage 6) | OCI VCN + security list + Ampere ARM compute + 200 GB block volume, deployed in `eu-frankfurt-1` and torn down to zero |
 
 ## Architecture
 
@@ -128,7 +131,7 @@ rootfs and a 64 MiB `tmpfs` for `/tmp`.
 | `scripts/verify_local.py` | Local verification harness: health, direct inference, concurrent agent runs, CPU/RAM sampling, log leak audit, JSON report |
 | `MANUAL_PREREQS.md` | Operator checklist: OCI credentials, SSH key, volume, models, `.env` |
 | `AGENT_GUIDE.md` | AI-agent playbook: bring-up, monitoring, delegation debugging |
-| `docs/` | Stage evidence: `stage-1` … `stage-5` verification files |
+| `docs/` | Stage evidence: `stage-1` … `stage-6` verification files |
 
 ## Quickstart
 
@@ -230,7 +233,7 @@ mismatched bearer token (constant-time comparison).
 - **No weights in Git** — model blobs live in the `model-weights` named volume;
   the Dockerfile bakes no weights.
 
-## Live on OCI (Stage 5)
+## Live on OCI (Stage 5, destroyed in Stage 6)
 
 Deployed and verified in `eu-frankfurt-1`, AD-1 — full evidence in
 [`docs/stage-5-verification.txt`](docs/stage-5-verification.txt):
@@ -248,6 +251,14 @@ Deployed and verified in `eu-frankfurt-1`, AD-1 — full evidence in
 
 Weights live on the block volume (`du -sh /models` → 1.8 G, matching `df` on
 `/mnt/llm-swarm`), so they survive container rebuilds and reboots.
+
+**Torn down.** Stage 6 stopped the stack on the host and destroyed all eight
+resources — instance, boot volume, 200 GB data volume, VCN, subnet, security
+list, internet gateway and route table. `tofu state list` is empty, the old
+public IP answers nothing, and a read-only provider query reports zero live
+project-owned resources, so none of the above is billable any more. The table
+records what existed during Stage 5; it is measurement history, not a running
+endpoint. See [`docs/stage-6-verification.txt`](docs/stage-6-verification.txt).
 
 ## Measured locally (Stage 4)
 
@@ -286,7 +297,7 @@ multi-node benchmark.
 - **Run records are not persisted.** They are returned in the HTTP response and
   written to container logs, not to disk.
 - **Single node, single process.** Fan-out is concurrent *within* one run loop
-  today; distributing agents across nodes is Stage 6.
+  today; distributing agents across nodes is Stage 7.
 - **The GPU override is unexecuted.** `docker/compose.vllm.yaml` is
   syntax-validated only; the development host has no GPU.
 - **No authentication beyond a shared bearer token.** Per-user identity and
@@ -314,8 +325,9 @@ AWS and GCP are supported ports, not certified targets.
 | 3 | Agent guide and manual prerequisites | both documents complete, links valid — **done** |
 | 4 | Local evaluation: task success, latency, memory | 3/3 workflows completed on 3B (CPU), measured latency/throughput/CPU/RAM, harness + log audit — **done** (`docs/stage-4-verification.txt`) |
 | 5 | Live OCI deployment | cloud-init done, volume mounted, 3/3 workflows completed on the host, secret audit clean — **done** (`docs/stage-5-verification.txt`) |
-| 6 | Scale and recovery (includes distributed fan-out and queueing across nodes) | load test, multi-node run record, restart drill |
-| 7 | Security audit, documentation, cost model | zero-leak audit signed off |
+| 6 | Clean teardown and zero-resource verification | both stacks stopped, `tofu destroy` 8/8, state empty, provider inventory 0 live — **done** (`docs/stage-6-verification.txt`) |
+| 7 | Scale and recovery (includes distributed fan-out and queueing across nodes) | load test, multi-node run record, restart drill |
+| 8 | Security audit, documentation, cost model | zero-leak audit signed off |
 
 ## License
 

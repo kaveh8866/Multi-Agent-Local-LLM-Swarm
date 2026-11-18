@@ -429,6 +429,12 @@ describing cost. The stack is not highly available, has no TLS or per-user auth,
 and runs a 3B model on CPU at ~7 tok/s: do not call it production-ready or claim
 GPU/cloud throughput beyond that measurement.
 
+**Stage 6 tore it down.** Both stacks were stopped, all eight resources were
+destroyed, `tofu state list` is empty and a read-only provider inventory reports
+zero live project-owned resources (`docs/stage-6-verification.txt`). The Stage 5
+numbers are historical measurements of a deployment that no longer exists: never
+present them as a live endpoint, and re-apply before any new live check.
+
 **Certification scope.** Final production verification and testing certification
 for this project are performed strictly on **Oracle Cloud Infrastructure**, using
 trial credits with high-RAM **Ampere ARM** instances (`VM.Standard.A1.Flex`,
@@ -456,11 +462,12 @@ or implied.
 | 3 | Agent guide and manual prerequisites | both documents complete, links valid, committed — **done** |
 | 4 | Local evaluation: task success, latency, memory | 3/3 workflows completed on `qwen2.5:3b-instruct`, measured latency/throughput/CPU/RAM, clean log audit — **done** (`docs/stage-4-verification.txt`) |
 | 5 | Live OCI deployment | healthy host, block volume consumed by the stack, 3/3 workflows on the host — **done** (`docs/stage-5-verification.txt`) |
-| 6 | Scale and recovery | load test, restart/recovery drill |
-| 7 | Security audit, documentation, cost model | zero-leak audit signed off |
+| 6 | Clean teardown and zero-resource verification | stacks down, `tofu destroy` 8/8, empty state, provider inventory clean — **done** (`docs/stage-6-verification.txt`) |
+| 7 | Scale and recovery | load test, restart/recovery drill |
+| 8 | Security audit, documentation, cost model | zero-leak audit signed off |
 
 > Distributed fan-out and queueing across nodes was originally pencilled in as
-> Stage 3; it moved to Stage 6 (scale) so the documentation stage keeps its
+> Stage 3; it moved to Stage 7 (scale) so the documentation stage keeps its
 > original place in the roadmap.
 
 ## 16. Handoff checklist

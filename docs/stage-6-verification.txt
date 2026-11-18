@@ -1,0 +1,356 @@
+================================================================================
+Project 10 — Multi-Agent Local LLM Swarm
+Stage 6 — Clean Teardown & Resource Cleanup
+Audit transcript
+Date: 2026-11-18
+Region: eu-frankfurt-1, availability domain AD-1
+Shape destroyed: VM.Standard.A2.Flex (4 OCPU / 24 GB, Ampere)
+Raw evidence: runtime/stage6-local-down.log, runtime/stage6-remote-prehealth.log,
+              runtime/stage6-remote-down.log, runtime/stage6-destroy-plan.txt,
+              runtime/stage6-destroy.log, runtime/stage6-inventory.txt
+              (all gitignored)
+================================================================================
+
+RESULT
+------
+The Compose stack was stopped cleanly both locally and on the cloud host, and
+all eight OpenTofu-managed OCI resources were destroyed. A read-only provider
+query afterwards returned zero live project-owned resources in every category:
+instances, volumes, boot volumes, volume attachments, VCNs, subnets, security
+lists, internet gateways and route tables.
+
+  project_live_total = 0
+  tofu state list    = (empty)
+  destroyed          = 8 of 8
+
+The host is gone (SSH times out, the API port refuses), so the compute and
+block-volume line items that made this project billable no longer exist. That
+is an inventory fact, not a billing-console reading — see §9.
+
+--------------------------------------------------------------------------------
+1. PRE-TEARDOWN HEALTH AND STATE
+--------------------------------------------------------------------------------
+Local stack, before the stop:
+
+  cg-swarm-llm            Exited (0)    2 hours ago
+  cg-swarm-orchestrator   Exited (137)  2 hours ago
+
+Both containers already existed but were stopped: Stage 4 exercised the stack
+locally and Stage 5 ran it in the cloud, so the local pair was idle. `down` is
+still the correct check — it proves the Compose project can be removed, not
+just stopped.
+
+Cloud host, measured over SSH immediately before the stop:
+
+  uname -m             aarch64
+  nproc                8
+  memory               23 GB total, 20 GB free
+  uptime               up 1:00
+  findmnt              /mnt/llm-swarm  /dev/sdb  ext4  rw,noatime
+  df -h                196G total, 1.8G used, 184G available (1%)
+  docker compose ps    cg-swarm-llm           Up About an hour (healthy)
+                       127.0.0.1:11434->11434/tcp
+                       cg-swarm-orchestrator  Up About an hour (healthy)
+                       127.0.0.1:8090->8080/tcp
+  GET /health          200
+  GET /ready           200
+                       {"status": "ready", "service": "swarm-orchestrator",
+                        "llm": "reachable", "model": "qwen2.5:3b-instruct"}
+  du -sh /models       1.8G
+
+So the teardown started from a healthy, serving deployment — not from an
+already-broken host that would have made a clean stop meaningless.
+
+OpenTofu state, before destroy:
+
+  $ tofu state list
+  module.compute.data.oci_core_images.ubuntu[0]
+  module.compute.data.oci_core_vnic.primary
+  module.compute.data.oci_core_vnic_attachments.this
+  module.compute.data.oci_identity_availability_domains.ads
+  module.compute.oci_core_instance.this
+  module.network.oci_core_internet_gateway.this
+  module.network.oci_core_route_table.public
+  module.network.oci_core_security_list.public
+  module.network.oci_core_subnet.public
+  module.network.oci_core_vcn.this
+  module.storage.oci_core_volume.llm
+  module.storage.oci_core_volume_attachment.llm
+
+12 entries: 8 managed resources plus 4 data sources. `terraform.tfstate` was
+52,637 bytes and its outputs still resolved (instance 130.61.236.3,
+`VM.Standard.A2.Flex (4 OCPU / 24 GB)`, 200 GB volume, ingress 22/11434/8090
+from the operator /32). The state tracked every provisioned resource, so the
+destroy could be trusted to touch exactly those and nothing else.
+
+--------------------------------------------------------------------------------
+2. COMPOSE STOP
+--------------------------------------------------------------------------------
+Local:
+
+  $ docker compose --env-file .env -f docker/docker-compose.yml down
+  Container cg-swarm-orchestrator  Stopped / Removed
+  Container cg-swarm-llm           Stopped / Removed
+  Network cloudguard-llm-swarm-net Removed
+  down_exit=0
+
+Post-down `ps -a` printed no rows and `docker ps -a --filter name=cg-swarm`
+listed nothing.
+
+Remote, with the Stage 5 overlay (host bind mounts):
+
+  $ docker compose --env-file .env -f docker/docker-compose.yml \
+      -f docker/compose.oci.yaml down
+  Container cg-swarm-orchestrator  Stopped / Removed
+  Container cg-swarm-llm           Stopped / Removed
+  Network cloudguard-llm-swarm-net Removed
+  down_exit=0
+
+Post-down on the host:
+
+  docker ps -a --filter name=cg-swarm   → no rows
+  curl /ready                           → 000 (connection refused)
+  findmnt /mnt/llm-swarm                → still mounted, 1.8G used
+
+The stop is graceful (SIGTERM, container stop grace period) rather than a hard
+kill, and it leaves the data volume mounted so a re-deploy would find its
+weights — the same behaviour Stage 5's reboot test relied on. Destroying the
+volume is the later, separate decision in §3.
+
+--------------------------------------------------------------------------------
+3. DESTRUCTIVE-ACTION GATE
+--------------------------------------------------------------------------------
+Teardown is irreversible: it deletes the instance, its boot volume, the 200 GB
+data volume with the pulled weights, and the network. Following AGENTS.md §5
+the order was plan → approval → destroy → empty state → provider check:
+
+  $ tofu plan -destroy -out=stage6-destroy.tfplan
+  Plan: 0 to add, 0 to change, 8 to destroy.
+
+The reviewed plan named exactly the stack from §1:
+
+  module.compute.oci_core_instance.this
+  module.network.oci_core_internet_gateway.this
+  module.network.oci_core_route_table.public
+  module.network.oci_core_security_list.public
+  module.network.oci_core_subnet.public
+  module.network.oci_core_vcn.this
+  module.storage.oci_core_volume.llm
+  module.storage.oci_core_volume_attachment.llm
+
+Decision Guard: the operator's Stage 6 request is the approval for this
+destructive action, and it was scoped to this project's own compartment and
+resource names. No unrelated resource was in the plan and none was touched.
+`modules/storage/main.tf` carries no `prevent_destroy` lifecycle, which is why
+the data volume was eligible — the module documents that a long-lived swarm
+should add it before a real model lands, and this deployment deliberately did
+not, because teardown was the requested outcome.
+
+--------------------------------------------------------------------------------
+4. OPENTOFU DESTROY
+--------------------------------------------------------------------------------
+  $ tofu destroy -auto-approve -input=false -no-color
+  Plan: 0 to add, 0 to change, 8 to destroy.
+
+  module.storage.oci_core_volume_attachment.llm   Destruction complete after 34s
+  module.storage.oci_core_volume.llm              Destruction complete after  3s
+  module.compute.oci_core_instance.this           Destruction complete after 54s
+  module.network.oci_core_subnet.public           Destruction complete after  1s
+  module.network.oci_core_security_list.public    Destruction complete after  0s
+  module.network.oci_core_route_table.public      Destruction complete after  0s
+  module.network.oci_core_internet_gateway.this   Destruction complete after  0s
+  module.network.oci_core_vcn.this                Destruction complete after  1s
+
+  Destroy complete! Resources: 8 destroyed.
+  destroy_exit=0
+
+Dependency order was handled by the graph, not by hand: attachment → volume →
+instance, then subnet, security list, route table, gateway, VCN. The instance
+took the longest because OCI terminates it asynchronously (54 s); the network
+teardown was sub-second once the instance was gone, which is the ordering
+Stage 5's README warned about.
+
+--------------------------------------------------------------------------------
+5. POST-DESTROY STATE
+--------------------------------------------------------------------------------
+  $ tofu state list
+  (no output, exit 0)
+
+  $ tofu output
+  Warning: No outputs found
+
+  terraform.tfstate        3,039 bytes  serial 67  resources 0  outputs 0
+  terraform.tfstate.backup 52,637 bytes (previous, pre-destroy serial)
+
+The empty state is retained locally (gitignored) so a future `plan` starts from
+a real, empty baseline instead of a missing file. It was not deleted: §5 of
+AGENTS.md says delete state only after the provider check, and keeping an empty
+state is the safer end position.
+
+--------------------------------------------------------------------------------
+6. ZERO-RESOURCE PROVIDER VERIFICATION
+--------------------------------------------------------------------------------
+No OCI CLI is installed on this workstation, so the check is a read-only
+OpenTofu configuration using the same provider, profile, region and compartment
+as the deployment (`runtime/oci-inventory/`, gitignored). It declares data
+sources only — the apply created nothing:
+
+  $ tofu apply -auto-approve -var-file=values.tfvars
+  Apply complete! Resources: 0 added, 0 changed, 0 destroyed.
+
+Project-owned live resources, by category:
+
+  project_live = {
+    boot_volumes       = []
+    instances          = []
+    internet_gateways  = []
+    route_tables       = []
+    security_lists     = []
+    subnets            = []
+    vcns               = []
+    volume_attachments = []
+    volumes            = []
+  }
+  project_live_total = 0
+
+The eight destroyed resources are still visible in the API listing, in terminal
+states, which is expected and not billable:
+
+  project_destroyed = {
+    instances          = ["llm-swarm-dev-vm (TERMINATED)"]
+    boot_volumes       = ["llm-swarm-dev-vm (Boot Volume) (TERMINATED)"]
+    volumes            = ["llm-swarm-dev-llm-data (TERMINATED)"]
+    volume_attachments = ["llm-swarm-dev-llm-data-attachment (DETACHED)"]
+  }
+
+Scoping proof. The compartment is shared with other CloudGuard projects, so the
+query also reports what it saw and deliberately left alone:
+
+  other_projects = {
+    instances = ["vector-lake-dev-vm"]
+    vcns      = ["vector-lake-dev-vcn"]
+    volumes   = ["vector-lake-dev-vector-data"]
+  }
+  compartment_totals = {
+    instances = 3   volumes = 2   boot_volumes = 3   volume_attachments = 2
+    vcns = 1        subnets = 1   security_lists = 2  route_tables = 2
+    internet_gateways = 1
+  }
+
+Of the 3 instances and 2 volumes present, one instance and one volume belong to
+Project 09 and are still running; the other two instances are TERMINATED
+(Project 08's and this one). None of Project 09's resources was modified — a
+teardown that emptied the whole compartment would have been a defect, not a
+success.
+
+Secondary check. A signed raw-API GET against the Core Services endpoint (no
+SDK, no CLI) confirmed the same terminal states for the instance, volume and
+attachment (`TERMINATED`, `TERMINATED`, `DETACHED`). Its network list endpoints
+(`/20160918/vcns`, `/subnets`) returned `404 NotAuthorizedOrNotFound` for this
+tenancy on every attempt, so the network layer is proven by the provider data
+sources above rather than by that script; the script was removed afterwards
+instead of being left as tooling that half-works.
+
+--------------------------------------------------------------------------------
+7. ENDPOINT CHECK
+--------------------------------------------------------------------------------
+  $ ssh -i <key> ubuntu@130.61.236.3
+  ssh: connect to host 130.61.236.3 port 22: Connection timed out
+
+  $ curl -m 10 http://130.61.236.3:8090/health
+  http_code = 000 (exit 28, timeout)
+
+The old public IP answers nothing. This is corroboration, not the proof: the
+proof is that the instance OCID reports TERMINATED and no live instance carries
+the project tag.
+
+--------------------------------------------------------------------------------
+8. WHAT REMAINS
+--------------------------------------------------------------------------------
+Local, all gitignored and none of it billable:
+
+  .env                                  local token, mode-restricted
+  terraform/terraform.tfvars            OCI identifiers and operator CIDR
+  terraform/terraform.tfstate           empty state, serial 67
+  terraform/stage2.tfplan, stage5.tfplan, stage6-destroy.tfplan   plan artefacts
+  runtime/                              logs, reports, the read-only inventory
+  .terraform/, provider cache           provider binaries
+
+The model weights are gone with the block volume. Re-deploying pulls
+`qwen2.5:3b-instruct` again (~1.9 GB) — there was no snapshot, because the
+request was a clean teardown to zero, not a pause. A future Stage 5 repeat
+should take a volume backup first if the weights are meant to survive.
+
+The local machine never held the weights: it used the `model-weights` named
+volume, and `docker compose down` (without `-v`) kept that volume. It is not a
+cloud resource.
+
+--------------------------------------------------------------------------------
+9. SPEND RATE
+--------------------------------------------------------------------------------
+The billable line items for this project were the A2.Flex instance (4 OCPU /
+24 GB), its 100 GB boot volume and the 200 GB block volume. All three are
+TERMINATED, and no project-owned resource remains in any live state, so this
+project's contribution to the cloud wallet is now zero.
+
+Not claimed: a billing-console or Usage API reading. Reading cost requires the
+Usage API and a policy this user was not provisioned with, and this report does
+not invent a "$0.00" figure it did not fetch. The statement above is an
+inventory fact — nothing that bills still exists — not a billing statement.
+Unrelated resources in the tenancy (Project 09's instance and volume) continue
+to bill their own project and are outside this audit.
+
+--------------------------------------------------------------------------------
+10. REPRODUCE
+--------------------------------------------------------------------------------
+  # 1. stop the stacks
+  docker compose --env-file .env -f docker/docker-compose.yml down
+  ssh -i <key> ubuntu@<ip> 'cd ~/llm-swarm && docker compose --env-file .env \
+    -f docker/docker-compose.yml -f docker/compose.oci.yaml down'
+
+  # 2. review, then destroy
+  cd terraform && tofu plan -destroy -out=stage6-destroy.tfplan
+  tofu destroy -auto-approve
+  tofu state list                      # empty
+
+  # 3. provider-side zero check (read-only, creates nothing)
+  cd ../runtime/oci-inventory
+  tofu init && tofu apply -auto-approve -var-file=values.tfvars && tofu output
+
+The inventory's `values.tfvars` is generated from `terraform/terraform.tfvars`
+(tenancy, compartment, region, profile) and stays out of Git with the rest of
+`runtime/`.
+
+--------------------------------------------------------------------------------
+11. GIT BOUNDARY
+--------------------------------------------------------------------------------
+  git check-ignore → .env, terraform/terraform.tfvars, terraform.tfstate,
+                     *.tfplan, runtime/                    all ignored
+  staged in this commit: docs/stage-6-verification.txt and the doc updates only
+  no state, tfvars, plan, log, OCID list or credential is tracked
+  no `feat(deploy)` claim; this is `chore(teardown)`
+
+--------------------------------------------------------------------------------
+12. LIMITS OF THIS STAGE
+--------------------------------------------------------------------------------
+- Billing figures are not read; "zero burn rate" means zero live billable
+  resources in the inventory, not a Usage API total.
+- The compartment still holds Project 09's running instance and volume. They
+  are not this project's and were not touched.
+- No volume backup or snapshot was taken; the weights are gone by design.
+- The host's `llm-swarm-mount.service` unit failure recorded in Stage 5 §9 was
+  never patched on the live host — it disappeared with the instance. The
+  template fix remains in `terraform/cloud-init.yaml.tftpl` for future applies,
+  still unverified on a booted host.
+- The local Compose stack is removed, not rebuilt; `up -d --build` recreates it
+  from the same committed files.
+- Stage 5's measurements stand as written. Nothing in this stage invalidates
+  them: they describe a deployment that existed, not one that exists now.
+
+================================================================================
+STAGE 6 RESULT: COMPLETE
+Local and remote stacks stopped gracefully; 8 of 8 OCI resources destroyed;
+OpenTofu state empty at serial 67; provider inventory reports 0 live
+project-owned resources in all nine categories; old public IP unreachable.
+Ready for final packaging and documentation.
+================================================================================
