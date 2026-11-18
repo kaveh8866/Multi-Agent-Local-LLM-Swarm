@@ -50,6 +50,13 @@ Sizing decides the shape and the model, so do this before provisioning.
 
 - [ ] I know which model I will run and it fits the shape in `terraform.tfvars`.
 
+> **Capacity reality (measured in Stage 5).** `A1.Flex` returned
+> `500-InternalError, Out of host capacity` for 4/24, 2/12 and 1/8 across all
+> three Frankfurt ADs in 45 attempts over ~25 minutes, and the tenancy was
+> subscribed to Frankfurt only. `A2.Flex` (also Ampere, credit-funded) placed on
+> the first attempt. Decide before `tofu apply` whether you will wait for
+> Always Free A1 capacity or accept A2 on trial credit.
+
 ## 1. Workstation tools
 
 | Tool | Minimum | Used for |
@@ -403,7 +410,7 @@ up run records, then `tofu plan -destroy` → operator approval → `tofu destro
 | --- | --- | --- |
 | `401 Unauthorized` from OCI during `tofu plan` | wrong fingerprint/key path/profile | compare `~/.oci/config` with the console API-key entry |
 | `NotAuthorizedOrNotFound` on a resource | missing compartment policy | add the policy in §2.3 |
-| `Out of host capacity` on apply | A1 stock exhausted in that AD | set `availability_domain` to another AD and re-plan |
+| `Out of host capacity` on apply | A1 stock exhausted across the region, not just that AD | retry AD-1/2/3 once each, then switch to `VM.Standard.A2.Flex` (credit-funded, same ARM profile) — A1 may stay full for days |
 | `no data block device found` in cloud-init | volume attached after first pass | `systemctl restart llm-swarm-mount`; check `lsblk` |
 | `Permission denied` writing `/mnt/llm-swarm` | volume not mounted (boot disk path) | `findmnt`, then re-run the mount unit |
 | `pull access denied` / model 404 | wrong tag | `ollama list` locally, use a tag that exists |

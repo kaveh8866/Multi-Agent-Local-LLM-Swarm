@@ -33,6 +33,15 @@ write_files:
 
       log() { echo "llm-swarm: $*"; }
 
+      # fstab mounts the volume by label before this unit runs on a normal boot,
+      # and device discovery deliberately skips disks that already have a mount
+      # point. Without this guard the unit exits 1 on every reboot even though
+      # storage is healthy, which makes `systemctl status` lie to operators.
+      if mountpoint -q "$MOUNT_POINT"; then
+        log "$MOUNT_POINT already mounted; nothing to do"
+        exit 0
+      fi
+
       usable_disk() {
         local candidate="$1" existing_type
         [ -b "$candidate" ] || return 1

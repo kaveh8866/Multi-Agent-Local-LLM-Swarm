@@ -1,0 +1,266 @@
+Project — Multi-Agent Local LLM Swarm
+Stage 5 — cloud deployment and integration on OCI
+Date: 2026-11-18
+Region: eu-frankfurt-1, availability domain AD-1
+Shape: VM.Standard.A2.Flex — 4 OCPU / 24 GB (Ampere ARM), 8 vCPU visible
+Public IP: 130.61.236.3
+Block volume: 200 GB, /dev/sdb, ext4 label llmswarm, mounted /mnt/llm-swarm
+Model: qwen2.5:3b-instruct (1.9 GB, pulled and digest-verified on the host)
+Repository: https://github.com/kaveh8866/Multi-Agent-Local-LLM-Swarm
+Branch: main
+Raw evidence: runtime/stage5-*.log, runtime/stage5-outputs.json,
+               runtime/stage5-remote-report.json (all gitignored)
+
+This stage applied the OpenTofu contract to the live OCI tenancy, bootstrapped
+the host over SSH, mounted the block volume and ran the swarm in the cloud.
+Everything below is measured; nothing is inferred from a plan.
+
+1. Capacity: A1 exhausted, A2 used
+----------------------------------
+The plan (8 resources) applied cleanly except for the compute instance.
+
+  module.network.*  VCN, IGW, route table, security list, subnet — created
+  module.compute.oci_core_instance.this
+    Error: 500-InternalError, Out of host capacity.
+
+Attempts (each a real API call, not a retry of a stale plan):
+
+  A1.Flex 4 OCPU / 24 GB   AD-1, AD-2, AD-3                    33 attempts
+  A1.Flex 2 OCPU / 12 GB   AD-1, AD-2, AD-3                     3 attempts
+  A1.Flex 1 OCPU /  8 GB   AD-1, AD-2, AD-3                     9 attempts
+  A1.Flex 1 OCPU /  6 GB   rejected by variables.tf (>= 8 GB)  24 attempts
+
+All A1 attempts across all three ADs returned the same service error:
+"500-InternalError, Out of host capacity." The tenancy is subscribed to
+eu-frankfurt-1 only (`GET /20160918/tenancies/{id}/regionSubscriptions` →
+one entry, status READY), so there is no alternate region to fall back to.
+
+Decision: OCI's Ampere **A2** family (VM.Standard.A2.Flex, AmpereOne) in AD-1,
+4 OCPU / 24 GB, funded by trial credit rather than the Always Free A1 allowance.
+The requirement was ARM Ampere with high RAM; A2 satisfies both. This is a
+deliberate, documented deviation from the A1 default in terraform.tfvars, not a
+silent change: terraform.tfvars is gitignored and holds instance_shape =
+"VM.Standard.A2.Flex" for this deployment.
+
+The A1 instances were never created, so nothing was leaked or half-provisioned
+at the compute layer; only the network and storage resources below exist.
+
+2. Provisioned infrastructure (real OCIDs from tofu output)
+----------------------------------------------------------
+  instance_public_ip         130.61.236.3
+  instance_private_ip        10.10.1.x (inside the swarm subnet)
+  availability_domain        jiTx:EU-FRANKFURT-1-AD-1
+  instance_shape             VM.Standard.A2.Flex (4 OCPU / 24 GB)
+  block_volume_size_gbs      200
+  block_volume_mount_point   /mnt/llm-swarm
+  ingress_ports              [22, 11434, 8090]
+
+Note: the `block_volume_device` output is null for this attachment (the provider
+only fills it for some attachment types); the guest device is /dev/sdb and the
+fstab entry mounts it by label, which is why the path survives reboots.
+
+Exposure, from the security list (output `ingress_exposure`):
+  port 22    source <operator>/32
+  port 11434 source <operator>/32
+  port 8090  source <operator>/32
+
+No port is open to 0.0.0.0/0. Both application ports are also published on
+127.0.0.1 by Compose, so the security list is the outer gate and the operator
+reaches the API through an SSH tunnel, not a public binding.
+
+Host, as measured over SSH:
+  uname -m                   aarch64
+  nproc                      8
+  memory                     23 GB total
+  cloud-init status          done
+  llm-swarm-mount            enabled (see §9: reports failed after reboot on
+                             this host until the patched helper is installed)
+  findmnt /mnt/llm-swarm     /dev/sdb ext4 195.8G
+  df -h                      196G total, 1.8G used, 184G available (1%)
+  docker                     29.1.3 (installed from Ubuntu packages by the
+                             deploy script; the image ships without it)
+
+3. Remote deployment
+--------------------
+Source transfer: a git archive of tracked files plus the new
+docker/compose.oci.yaml was copied over SCP (61 files, 84 KB) and extracted to
+~/llm-swarm. The repository was not cloned on the host, so the deployment uses
+the exact committed tree rather than whatever GitHub had at that moment.
+
+Secrets: .env was generated from the workstation .env with a fresh 64-hex
+orchestrator token, OLLAMA_PORT=11434, OLLAMA_CPUS=8, and the host-side
+SWARM_HOST_MODEL_DIR / SWARM_HOST_STATE_DIR pointing at the block volume. It was
+transferred out-of-band, installed with mode 600, and never printed. The host
+.env is not in Git.
+
+Defect caught during this stage: the overlay first reused SWARM_STATE_DIR for
+the host path. That variable is also the worker's *container* path (/app/state),
+so the host path leaked into the orchestrator environment and run-record writes
+would have gone outside the bind mount. The host variables are now
+SWARM_HOST_MODEL_DIR / SWARM_HOST_STATE_DIR, and SWARM_STATE_DIR stays
+/app/state.
+
+Failed first attempt (real defect, fixed): the transferred .env carried CRLF
+line endings, so `ollama pull` received "qwen2.5:3b-instruct\r" and failed with
+"Error: invalid model name". The deploy script now normalises CRLF in .env before
+reading it, and the values were re-checked with `cat -A`.
+
+Bind mounts (docker/compose.oci.yaml):
+  /mnt/llm-swarm/models  -> /models        (Ollama blobs, 1.8 GB after pull)
+  /mnt/llm-swarm/state   -> /app/state     (run records, uid 10001)
+  ../configs             -> /app/configs   (read-only)
+
+Proof the weights are on the block volume, not the boot disk:
+  docker exec cg-swarm-llm du -sh /models  ->  1.8G
+  df -h /mnt/llm-swarm                     ->  1.8G used
+  mount unit enabled                       ->  survives reboot
+
+Model pull on the host: "verifying sha256 digest" → "writing manifest" →
+"success"; `ollama list` shows qwen2.5:3b-instruct at 1.9 GB.
+
+Stack: `docker compose -f docker/docker-compose.yml -f docker/compose.oci.yaml
+up -d --build` → orchestrator ready 6 s after start, /ready body
+{"status":"ready","llm":"reachable","model":"qwen2.5:3b-instruct"}.
+
+4. Live verification from the workstation
+-----------------------------------------
+SSH tunnel: `ssh -N -L 18090:127.0.0.1:8090 -L 18434:127.0.0.1:11434`.
+
+  GET /health  → 200, {"status":"ok","service":"swarm-orchestrator",
+                        "workflows":[code_review, reasoning_chain, research_brief],
+                        "personas":[coder, critic, planner, researcher]}
+  GET /ready   → 200, llm reachable, model qwen2.5:3b-instruct
+  /api/version → Ollama 0.5.7
+
+Direct inference through the tunnel (OpenAI-compatible /v1/chat/completions):
+  cold (model load)   12,625 ms   19 tok  1.50 tok/s
+  warm                9,958 ms   67 tok  6.73 tok/s
+  warm                8,119 ms   63 tok  7.76 tok/s
+
+The first number is dominated by loading 2.4 GB of weights from the block
+volume; the warm numbers are the steady state.
+
+Tuning measurement: with the container capped at OLLAMA_CPUS=4 (half the node)
+warm throughput was 3.3–3.9 tok/s. Raising the cap to 8 (the full 4 OCPU
+allocation) produced the 6.7–7.8 tok/s above. Both are recorded because the
+first is what a default deployment would have delivered.
+
+5. Multi-agent collaboration on the cloud host
+----------------------------------------------
+The Stage 4 harness was run on the host itself (so its docker stats and log
+scanner see the cloud containers), concurrency 2, budgets capped at 6:
+runtime/stage5-remote-report.json, fetched back to the workstation.
+
+  task                        workflow         status      steps  wall
+  review-swarm-worker-auth    code_review      completed     5    208.3 s
+  research-local-llm-serving  research_brief   completed     5    249.0 s
+  size-a-swarm-topology       reasoning_chain  timeout       4    381.2 s
+
+  success rate 2/3, wall-clock 457.2 s, 0 OOM, 0 restarts
+
+The timeout is a configuration limit, not a model failure: default
+SWARM_TASK_TIMEOUT_SECONDS=300, and the 5-minute mark was reached mid-run at
+~7 tok/s. After raising SWARM_TASK_TIMEOUT_SECONDS to 900 (and
+SWARM_LLM_TIMEOUT_SECONDS to 300) and recreating the orchestrator, the same
+workflow was re-run through the tunnel:
+
+  size-a-swarm-topology  reasoning_chain  completed  6 steps  310.3 s
+  personas planner/researcher/critic, plan of 4 reasoning steps, errors []
+
+So all three workflows complete live on the cloud host; one needed a timeout
+that matches CPU inference rather than a workstation.
+
+Prompt and handoff audit (host run): 14 turns inspected, 0 unrendered
+placeholders, all four personas exercised, 2 tool observations, 0 empty
+responses.
+
+6. Resource use during concurrent cloud inference
+-------------------------------------------------
+115 samples at 2 s intervals during the concurrent run:
+
+  peak combined CPU      852.85%   (8 vCPU node)
+  peak combined memory   2,246.3 MiB
+  OOMKilled              false (both containers)
+  restart count          0 (both containers)
+
+2.2 GB resident for a 3B Q4 model plus the orchestrator leaves ample headroom
+in 24 GB; the constraint on this shape is CPU, not memory.
+
+7. Secret and log audit
+-----------------------
+Host log scan (337 lines: 33 orchestrator, 304 inference):
+  orchestrator token occurrences   0
+  Authorization header lines       0
+  sk-/AKIA/ghp_/PEM/OCID matches   0
+  token present in report         false
+
+The worker logs request lines without headers, so the bearer token never
+reaches stdout. `.env` on the host is mode 600 and outside Git; the local
+runtime copy (runtime/remote.env) is gitignored.
+
+8. Reproduce
+------------
+  cd terraform && tofu init && tofu validate
+  tofu apply -auto-approve          # A1 first; A2 if A1 reports no capacity
+  scp -i <key> <archive> ubuntu@<ip>:~/
+  ssh -i <key> ubuntu@<ip> 'cd ~/llm-swarm && bash scripts/deploy_oci.sh'
+  ssh -N -L 18090:127.0.0.1:8090 -L 18434:127.0.0.1:11434 ubuntu@<ip>
+
+9. Reboot persistence test
+--------------------------
+The instance was soft-rebooted from the host (uptime reset to "up 0 minutes") to
+test persistence rather than assume it.
+
+After the reboot, before any operator action:
+
+  cloud-init status            done
+  findmnt /mnt/llm-swarm       /dev/sdb  LABEL=llmswarm  ext4  195.8G
+  fstab entry                  LABEL=llmswarm /mnt/llm-swarm ext4 defaults,nofail,noatime 0 2
+  df -h /mnt/llm-swarm         1.8G used  (same as before the reboot)
+  docker exec ... du -sh /models   1.8G
+  docker ps                    cg-swarm-llm Up (healthy)
+                               cg-swarm-orchestrator Up (healthy)
+  GET /ready                   200 {"llm":"reachable","model":"qwen2.5:3b-instruct"}
+
+So the volume, the 3B weights and both services survive a reboot with no manual
+step, which is the persistence guarantee the requirement asks for.
+
+The first completion after the reboot took 26,579 ms for 36 tokens (1.35 tok/s):
+the model is not resident in RAM across a reboot, it is loaded from the block
+volume on first use. That is cold-start cost, not a throughput regression — the
+warm measurements in §4 stand.
+
+**Defect found by this test.** `llm-swarm-mount.service` reported
+`failed (status=1)` after the reboot even though storage was healthy. Journal:
+
+  llm-swarm: waiting for the attached block device (attempt 36/36)
+  llm-swarm: no data block device found; the volume is probably not attached yet
+
+The unit waits for a device that its own `usable_disk()` deliberately skips when
+the disk already has a mount point — and on a normal boot fstab mounts the
+volume first. The unit therefore fails *because* nothing is wrong. Fixed in
+`terraform/cloud-init.yaml.tftpl` with an early exit when `$MOUNT_POINT` is
+already mounted, so the unit reports success on every subsequent boot.
+
+Limitation of this run: the running host still shows the failed unit. Applying
+the patched helper to a live host is a root-owned file change, and this agent's
+environment declined the privileged command, so it is left to the operator:
+re-render `/usr/local/sbin/mount-llm-swarm` from the template, install it as
+root (mode 0755), then `systemctl reset-failed llm-swarm-mount` and
+`systemctl restart llm-swarm-mount`. New deployments get the fix automatically.
+The failure did not affect the mount, the weights or the containers.
+
+10. Not verified / limits
+-------------------------
+- No A1 instance was ever created; the Always Free claim is untested on this
+  tenancy. A2 is credit-funded.
+- GPU path (vLLM override) still unexecuted.
+- The code-review workflow still cannot read files (tool whitelist is
+  calculator/text_stats); its findings on the cloud run are generic.
+- Throughput is a single 3B model on CPU at 4 OCPU; no multi-node or
+  multi-model numbers.
+- Run records exist in the HTTP response, the harness report and container
+  logs, not as files on the data volume (the state bind mount is provisioned
+  but the worker does not persist records yet).
+- The instance and volume are left running after this stage (billable). Teardown
+  is a separate, explicitly requested action.

@@ -146,11 +146,11 @@ docker system df -v | grep -E 'cloudguard-llm-swarm|REPOSITORY'
 docker run --rm -v cloudguard-llm-swarm-weights:/models alpine du -sh /models
 ```
 
-### 5.4 Persistent storage on a cloud host (OCI, Stage 2)
+### 5.4 Persistent storage on a cloud host (OCI, Stage 2 + Stage 5)
 
-Stage 2 provisions a block volume mounted at `/mnt/llm-swarm` by cloud-init and
-prepares `models/`, `cache/` and `state/`. Verify the mount **before** pulling
-weights, or the download lands on the boot disk and is lost on replacement:
+The block volume is mounted at `/mnt/llm-swarm` by cloud-init, which prepares
+`models/`, `cache/` and `state/`. Verify the mount **before** pulling weights,
+or the download lands on the boot disk and is lost on replacement:
 
 ```bash
 findmnt /mnt/llm-swarm                       # must be the ext4 data volume
@@ -159,10 +159,25 @@ systemctl status llm-swarm-mount --no-pager  # active (exited)
 df -h /mnt/llm-swarm
 ```
 
-**Known gap:** the Compose file currently uses Docker named volumes. Stage 5 adds
-`docker/compose.oci.yaml` to bind-mount `/mnt/llm-swarm/{models,cache,state}`.
-Until that exists, a cloud host's block volume is mounted but **not** consumed by
-the stack — do not claim otherwise.
+**Cloud mount:** `docker/compose.oci.yaml` bind-mounts
+`/mnt/llm-swarm/{models,state}` into the containers and replaces the named
+volumes. Run Compose with both files on a host:
+
+```bash
+docker compose --env-file .env \
+  -f docker/docker-compose.yml -f docker/compose.oci.yaml up -d --build
+```
+
+The host paths are `SWARM_HOST_MODEL_DIR` / `SWARM_HOST_STATE_DIR`. Do **not**
+reuse `SWARM_STATE_DIR` for a host path: that variable is the worker's container
+path (`/app/state`), and pointing it at a host directory moves the worker's
+writes outside the bind mount. Verify consumption, not just attachment:
+
+```bash
+docker exec cg-swarm-llm du -sh /models        # matches df on /mnt/llm-swarm
+df -h /mnt/llm-swarm
+docker exec cg-swarm-orchestrator ls -ld /app/state
+```
 
 ### 5.5 Health contract
 
@@ -394,6 +409,7 @@ Rules:
 | container exits with `read_only file system` | orchestrator writing outside `/tmp` or `/app/state` | add a named volume; do not drop `read_only` |
 | `OOMKilled=true` on `cg-swarm-llm` | model does not fit the limit | smaller model or raised `OLLAMA_MEM_LIMIT` |
 | weights missing after restart | volume removed (`down -v`) or mount not on the data volume | re-pull; check `findmnt /mnt/llm-swarm` |
+| mount unit `failed` after reboot while `findmnt` shows the volume | fstab mounted it first and device discovery skips already-mounted disks (fixed in the template) | install the current helper, `systemctl reset-failed llm-swarm-mount`, restart it |
 | `port is already allocated` on 11434 | native Ollama or another container | set `OLLAMA_PORT=11435` in `.env` |
 
 ## 13. Cloud portability and certification scope
@@ -404,12 +420,14 @@ topology runs on AWS (EC2 + EBS + VPC), GCP (GCE + Persistent Disk + VPC) or OCI
 module bodies change, while variables, outputs and the compose contract stay
 fixed. `terraform/README.md` holds the mapping table.
 
-**Status.** Stages 1–4 are local only: the stack is verified on a workstation
-(`docs/stage-4-verification.txt`, 3/3 workflows, ~14 tok/s on CPU) and Stage 2 is
-a validated plan — no instance, network or volume exists and no state file has
-been written. Do not describe the project as deployed, highly available or
-production-ready; stages 5–7 are the ones that earn those words, and a CPU
-throughput number is not a GPU or cloud benchmark.
+**Status.** Stage 5 is deployed: `VM.Standard.A2.Flex` (4 OCPU / 24 GB, Ampere),
+200 GB block volume at `/mnt/llm-swarm`, orchestrator and Ollama healthy, and all
+three workflows completed on the host (`docs/stage-5-verification.txt`). The
+default Always Free A1 shape was unavailable in all three Frankfurt ADs (45
+attempts, `500-InternalError`), so the host is credit-funded — say that when
+describing cost. The stack is not highly available, has no TLS or per-user auth,
+and runs a 3B model on CPU at ~7 tok/s: do not call it production-ready or claim
+GPU/cloud throughput beyond that measurement.
 
 **Certification scope.** Final production verification and testing certification
 for this project are performed strictly on **Oracle Cloud Infrastructure**, using
@@ -437,7 +455,7 @@ or implied.
 | 2 | OCI network, inference node, block volume, cloud-init | `fmt`, `validate`, `plan` — **done** (`docs/stage-2-verification.txt`) |
 | 3 | Agent guide and manual prerequisites | both documents complete, links valid, committed — **done** |
 | 4 | Local evaluation: task success, latency, memory | 3/3 workflows completed on `qwen2.5:3b-instruct`, measured latency/throughput/CPU/RAM, clean log audit — **done** (`docs/stage-4-verification.txt`) |
-| 5 | Live OCI deployment | healthy host, volume mounted, live task run |
+| 5 | Live OCI deployment | healthy host, block volume consumed by the stack, 3/3 workflows on the host — **done** (`docs/stage-5-verification.txt`) |
 | 6 | Scale and recovery | load test, restart/recovery drill |
 | 7 | Security audit, documentation, cost model | zero-leak audit signed off |
 

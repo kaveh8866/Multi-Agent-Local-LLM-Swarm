@@ -3,9 +3,9 @@
 ![Python](https://img.shields.io/badge/orchestrator-Python%203.12-3776AB?logo=python&logoColor=white)
 ![Ollama](https://img.shields.io/badge/inference-Ollama%20%2F%20vLLM-000000?logo=ollama&logoColor=white)
 ![Docker](https://img.shields.io/badge/packaging-Docker%20Compose-2496ED?logo=docker&logoColor=white)
-![OpenTofu](https://img.shields.io/badge/IaC-OpenTofu%20(Stage%202)-844FBA?logo=opentofu&logoColor=white)
+![OpenTofu](https://img.shields.io/badge/IaC-OpenTofu%20(Stage%202%E2%80%935)-844FBA?logo=opentofu&logoColor=white)
 ![OCI](https://img.shields.io/badge/certified%20on-OCI-F80000?logo=oracle&logoColor=white)
-![Stage](https://img.shields.io/badge/stage-4%20%C2%B7%20local%20verified-blue)
+![Stage](https://img.shields.io/badge/stage-5%20%C2%B7%20live%20on%20OCI-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 A containerized **multi-agent swarm** that runs entirely on local language
@@ -23,14 +23,17 @@ persistent block volume for model weights and agent state.
 > **Stage scope.** Stage 1 shipped the scaffold: repository layout, container
 > topology, persona/workflow/task configuration, the orchestration loop and the
 > task API, verified in [`docs/stage-1-verification.txt`](docs/stage-1-verification.txt).
-> Stage 2 adds the OpenTofu OCI infrastructure contract (`terraform/`): it
-> formats, validates and plans cleanly (8 resources to add) but has **not been
-> applied**, so no cloud resource exists. Stage 3 adds the operator checklist and
-> agent playbook; Stage 4 runs the stack for real on `qwen2.5:3b-instruct`
-> (3/3 workflows completed, measured latency, CPU/RAM and a clean log audit —
-> [`docs/stage-4-verification.txt`](docs/stage-4-verification.txt)). No
-> model-quality claim is made — see [Honest limits](#honest-limits) and
-> [`docs/stage-2-verification.txt`](docs/stage-2-verification.txt).
+> Stage 2 adds the OpenTofu OCI infrastructure contract (`terraform/`); Stage 5
+> **applies it to a real OCI tenancy** — VCN, security list, Ampere ARM compute,
+> 200 GB block volume — and runs the swarm there
+> ([`docs/stage-5-verification.txt`](docs/stage-5-verification.txt)). The default
+> Always Free A1 shape reported "out of host capacity" in all three Frankfurt
+> ADs after 45 attempts, so the deployment uses **A2.Flex 4 OCPU / 24 GB**
+> (AmpereOne, trial credit) instead; that deviation is documented, not hidden.
+> Stage 3 adds the operator checklist and agent playbook; Stage 4 verifies the
+> stack locally on `qwen2.5:3b-instruct`
+> ([`docs/stage-4-verification.txt`](docs/stage-4-verification.txt)). No
+> model-quality claim is made — see [Honest limits](#honest-limits).
 
 ---
 
@@ -45,7 +48,7 @@ persistent block volume for model weights and agent state.
 | Tools | `calculator`, `text_stats` | Deterministic, side-effect-free, AST-validated; no shell and no filesystem |
 | Task contract | JSON Schema (`configs/tasks/schema.json`) | Tasks are validated before a model is called |
 | Packaging | Docker Compose, hardened containers | Read-only orchestrator rootfs, `cap_drop: ALL`, `no-new-privileges`, resource envelopes |
-| Infrastructure | OpenTofu (Stage 2) | OCI compute + block volume; the directory currently holds the contract only |
+| Infrastructure | OpenTofu (applied in Stage 5) | OCI VCN + security list + Ampere ARM compute + 200 GB block volume, live in `eu-frankfurt-1` |
 
 ## Architecture
 
@@ -102,6 +105,8 @@ rootfs and a 64 MiB `tmpfs` for `/tmp`.
 | Path | Contents |
 | --- | --- |
 | `docker/docker-compose.yml` | Canonical two-service topology, limits, hardening |
+| `docker/compose.oci.yaml` | Host overlay: binds `/mnt/llm-swarm/{models,state}` into the containers |
+| `scripts/deploy_oci.sh` | Remote bootstrap: verify volume, install Docker, compose up, pull model |
 | `docker-compose.yml` (root) | `extends` entrypoint for discovery and audit |
 | `docker/worker/Dockerfile` | Orchestrator image, unprivileged uid 10001 |
 | `docker/ollama/Modelfile.swarm` | Optional pinned model parameters and system preamble |
@@ -123,7 +128,7 @@ rootfs and a 64 MiB `tmpfs` for `/tmp`.
 | `scripts/verify_local.py` | Local verification harness: health, direct inference, concurrent agent runs, CPU/RAM sampling, log leak audit, JSON report |
 | `MANUAL_PREREQS.md` | Operator checklist: OCI credentials, SSH key, volume, models, `.env` |
 | `AGENT_GUIDE.md` | AI-agent playbook: bring-up, monitoring, delegation debugging |
-| `docs/` | Stage evidence (`stage-1`, `stage-2`, `stage-3` and `stage-4` verification files) |
+| `docs/` | Stage evidence: `stage-1` … `stage-5` verification files |
 
 ## Quickstart
 
@@ -225,6 +230,25 @@ mismatched bearer token (constant-time comparison).
 - **No weights in Git** — model blobs live in the `model-weights` named volume;
   the Dockerfile bakes no weights.
 
+## Live on OCI (Stage 5)
+
+Deployed and verified in `eu-frankfurt-1`, AD-1 — full evidence in
+[`docs/stage-5-verification.txt`](docs/stage-5-verification.txt):
+
+| Item | Measured |
+| --- | --- |
+| Instance | `VM.Standard.A2.Flex`, 4 OCPU / 24 GB, aarch64, `130.61.236.3` |
+| Storage | 200 GB block volume, ext4, mounted `/mnt/llm-swarm`, mount unit enabled |
+| Exposure | 22 / 11434 / 8090, operator `/32` only; app ports also loopback-bound |
+| Services | orchestrator + Ollama healthy, `/ready` 200, model resident 2.1 GiB |
+| Live workflows | 3/3 completed — `code_review` 208 s, `research_brief` 249 s, `reasoning_chain` 310 s (after raising the 300 s task timeout) |
+| Cloud throughput | 6.7–7.8 tok/s warm on 8 vCPU (3.3–3.9 with the default 4-CPU cap) |
+| Peak resources | 853% CPU, 2.25 GiB RAM, no OOM, 0 restarts |
+| Secret audit | 0 token, header or key-pattern hits across 337 log lines |
+
+Weights live on the block volume (`du -sh /models` → 1.8 G, matching `df` on
+`/mnt/llm-swarm`), so they survive container rebuilds and reboots.
+
 ## Measured locally (Stage 4)
 
 `qwen2.5:3b-instruct` on CPU (Ollama 0.5.7, 6 CPU quota), two concurrent agent
@@ -246,10 +270,12 @@ multi-node benchmark.
 
 ## Honest limits
 
-- **No cloud resource exists.** The OpenTofu modules format, validate and plan
-  cleanly against the live tenancy (8 resources to add, 0 warnings), but nothing
-  has been applied: no VCN, instance, volume or state file exists, and
-  cloud-init has never run on a host.
+- **The live host is A2, not Always Free A1.** `A1.Flex` at 4/24, 2/12 and 1/8
+  returned `500-InternalError, Out of host capacity` in AD-1, AD-2 and AD-3 (45
+  attempts over ~25 minutes), and this tenancy is subscribed to Frankfurt only.
+  The deployment therefore runs on `VM.Standard.A2.Flex` (AmpereOne, 4 OCPU /
+  24 GB) on trial credit: the Always Free claim is untested and the host is
+  billable while it exists.
 - **Performance numbers are one model, one node, one sample each.** The unit
   suite still runs against a scripted model double; Stage 4 measured a CPU-only
   3B model and makes no claim about larger models, GPU throughput, concurrency
@@ -287,7 +313,7 @@ AWS and GCP are supported ports, not certified targets.
 | 2 | OCI network, inference node, block volume, cloud-init | `fmt`, `validate`, `plan` — **done** (`docs/stage-2-verification.txt`), not applied |
 | 3 | Agent guide and manual prerequisites | both documents complete, links valid — **done** |
 | 4 | Local evaluation: task success, latency, memory | 3/3 workflows completed on 3B (CPU), measured latency/throughput/CPU/RAM, harness + log audit — **done** (`docs/stage-4-verification.txt`) |
-| 5 | Live OCI deployment | cloud-init done, volume mounted, healthy services, live run |
+| 5 | Live OCI deployment | cloud-init done, volume mounted, 3/3 workflows completed on the host, secret audit clean — **done** (`docs/stage-5-verification.txt`) |
 | 6 | Scale and recovery (includes distributed fan-out and queueing across nodes) | load test, multi-node run record, restart drill |
 | 7 | Security audit, documentation, cost model | zero-leak audit signed off |
 

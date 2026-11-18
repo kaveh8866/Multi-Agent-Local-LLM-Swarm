@@ -1,0 +1,36 @@
+# =============================================================================
+# OCI host overlay — put weights and run records on the block volume
+# =============================================================================
+# The base file uses Docker named volumes so a workstation never writes into the
+# checkout. On a provisioned host, cloud-init mounts the persistent data volume
+# at /mnt/llm-swarm and creates models/, cache/ and state/ with the ownership the
+# containers need (root for Ollama's blobs, uid 10001 for orchestrator state).
+#
+# This overlay replaces those named-volume mounts with bind mounts, so model
+# weights and run records survive container replacement, image rebuilds and
+# reboots — they live on the OCI Block Volume, not the boot disk.
+#
+# Usage (on the instance, from the repository root):
+#   docker compose --env-file .env \
+#     -f docker/docker-compose.yml \
+#     -f docker/compose.oci.yaml up -d --build
+#
+# Override the host paths only if volume_mount_point was changed in
+# terraform.tfvars; SWARM_HOST_MODEL_DIR / SWARM_HOST_STATE_DIR are read from
+# .env. They are deliberately distinct from SWARM_STATE_DIR, which is the
+# *container* path the worker writes to (/app/state): pointing that at a host
+# path would make the worker write outside its bind mount.
+
+services:
+  llm-runtime:
+    volumes:
+      # Ollama keeps blobs and manifests here (OLLAMA_MODELS=/models).
+      - ${SWARM_HOST_MODEL_DIR:-/mnt/llm-swarm/models}:/models
+      - ./ollama/Modelfile.swarm:/config/Modelfile.swarm:ro
+
+  swarm-orchestrator:
+    volumes:
+      # Read-only configuration, same as the base file.
+      - ../configs:/app/configs:ro
+      # Run records and checkpoints on persistent storage.
+      - ${SWARM_HOST_STATE_DIR:-/mnt/llm-swarm/state}:/app/state
