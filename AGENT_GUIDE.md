@@ -211,6 +211,26 @@ Run statuses: `completed`, `completed_with_warnings` (non-fatal note, e.g. the
 planner returned no parseable subtasks), `budget_exhausted`, `timeout`, `failed`
 (the model call itself failed).
 
+### 6.5 One-shot verification harness
+
+`scripts/verify_local.py` performs the whole Stage 4 check in one command and
+writes a JSON report to `runtime/` (gitignored):
+
+```bash
+python scripts/verify_local.py --concurrency 2 --max-steps 10
+```
+
+It measures `/health` and `/ready`, direct completions with token throughput,
+every task in `configs/tasks/` at the given concurrency, per-container CPU/RAM
+peaks, OOM state, unrendered prompt placeholders, and a log audit that fails if
+the orchestrator token or any key-shaped string reaches stdout. `--max-steps` is
+an upper bound: the effective budget stays `min(declared, cap)`. Exit 0 means
+health 200/200, every completion 200 and every task completed.
+
+The harness reads `OLLAMA_PORT` from `.env`. Port 11434 is often a *native*
+Ollama on the workstation; querying it silently benchmarks the wrong server and
+reports "model not found" for a perfectly healthy stack.
+
 ## 7. Inspecting agent communication
 
 Every model call is one turn in the run record:
@@ -384,10 +404,12 @@ topology runs on AWS (EC2 + EBS + VPC), GCP (GCE + Persistent Disk + VPC) or OCI
 module bodies change, while variables, outputs and the compose contract stay
 fixed. `terraform/README.md` holds the mapping table.
 
-**Status.** Stage 1 is local only and Stage 2 is a validated plan: no instance,
-network or volume exists, and no state file has been written. Do not describe the
-project as deployed, highly available, benchmarked or production-ready; stages
-5–7 are the ones that earn those words.
+**Status.** Stages 1–4 are local only: the stack is verified on a workstation
+(`docs/stage-4-verification.txt`, 3/3 workflows, ~14 tok/s on CPU) and Stage 2 is
+a validated plan — no instance, network or volume exists and no state file has
+been written. Do not describe the project as deployed, highly available or
+production-ready; stages 5–7 are the ones that earn those words, and a CPU
+throughput number is not a GPU or cloud benchmark.
 
 **Certification scope.** Final production verification and testing certification
 for this project are performed strictly on **Oracle Cloud Infrastructure**, using
@@ -414,7 +436,7 @@ or implied.
 | 1 | Scaffold, compose, personas/workflows, task schema, run loop | tests, compose config, image build, API surface — **done** (`docs/stage-1-verification.txt`) |
 | 2 | OCI network, inference node, block volume, cloud-init | `fmt`, `validate`, `plan` — **done** (`docs/stage-2-verification.txt`) |
 | 3 | Agent guide and manual prerequisites | both documents complete, links valid, committed — **done** |
-| 4 | Local evaluation: task success, latency, memory | measured metrics |
+| 4 | Local evaluation: task success, latency, memory | 3/3 workflows completed on `qwen2.5:3b-instruct`, measured latency/throughput/CPU/RAM, clean log audit — **done** (`docs/stage-4-verification.txt`) |
 | 5 | Live OCI deployment | healthy host, volume mounted, live task run |
 | 6 | Scale and recovery | load test, restart/recovery drill |
 | 7 | Security audit, documentation, cost model | zero-leak audit signed off |

@@ -5,7 +5,7 @@
 ![Docker](https://img.shields.io/badge/packaging-Docker%20Compose-2496ED?logo=docker&logoColor=white)
 ![OpenTofu](https://img.shields.io/badge/IaC-OpenTofu%20(Stage%202)-844FBA?logo=opentofu&logoColor=white)
 ![OCI](https://img.shields.io/badge/certified%20on-OCI-F80000?logo=oracle&logoColor=white)
-![Stage](https://img.shields.io/badge/stage-2%20%C2%B7%20iaC-blue)
+![Stage](https://img.shields.io/badge/stage-4%20%C2%B7%20local%20verified-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 A containerized **multi-agent swarm** that runs entirely on local language
@@ -25,8 +25,11 @@ persistent block volume for model weights and agent state.
 > task API, verified in [`docs/stage-1-verification.txt`](docs/stage-1-verification.txt).
 > Stage 2 adds the OpenTofu OCI infrastructure contract (`terraform/`): it
 > formats, validates and plans cleanly (8 resources to add) but has **not been
-> applied**, so no cloud resource exists. No model-quality claim is made — see
-> [Honest limits](#honest-limits) and
+> applied**, so no cloud resource exists. Stage 3 adds the operator checklist and
+> agent playbook; Stage 4 runs the stack for real on `qwen2.5:3b-instruct`
+> (3/3 workflows completed, measured latency, CPU/RAM and a clean log audit —
+> [`docs/stage-4-verification.txt`](docs/stage-4-verification.txt)). No
+> model-quality claim is made — see [Honest limits](#honest-limits) and
 > [`docs/stage-2-verification.txt`](docs/stage-2-verification.txt).
 
 ---
@@ -116,10 +119,11 @@ rootfs and a 64 MiB `tmpfs` for `/tmp`.
 | `configs/prompts/` | Persona prompts |
 | `configs/tasks/` | JSON Schema + three example tasks |
 | `terraform/` | OpenTofu OCI modules: VCN, security list, A1.Flex compute, block volume, cloud-init |
-| `tests/test_scaffold.py` | 31 unit tests: config, registry, tools, delegation, loop, auth, compose |
+| `tests/test_scaffold.py` | 33 unit tests: config, registry, tools, delegation, loop, auth, compose |
+| `scripts/verify_local.py` | Local verification harness: health, direct inference, concurrent agent runs, CPU/RAM sampling, log leak audit, JSON report |
 | `MANUAL_PREREQS.md` | Operator checklist: OCI credentials, SSH key, volume, models, `.env` |
 | `AGENT_GUIDE.md` | AI-agent playbook: bring-up, monitoring, delegation debugging |
-| `docs/` | Stage evidence (`stage-1-verification.txt`, `stage-2-verification.txt`) |
+| `docs/` | Stage evidence (`stage-1`, `stage-2`, `stage-3` and `stage-4` verification files) |
 
 ## Quickstart
 
@@ -221,18 +225,42 @@ mismatched bearer token (constant-time comparison).
 - **No weights in Git** — model blobs live in the `model-weights` named volume;
   the Dockerfile bakes no weights.
 
+## Measured locally (Stage 4)
+
+`qwen2.5:3b-instruct` on CPU (Ollama 0.5.7, 6 CPU quota), two concurrent agent
+runs, workstation with 16 logical CPUs — full evidence in
+[`docs/stage-4-verification.txt`](docs/stage-4-verification.txt):
+
+| Metric | Measured |
+| --- | --- |
+| Workflow success rate | 3/3 completed (`code_review`, `research_brief`, `reasoning_chain`), reproduced across two runs |
+| Agent wall-clock | 46–218 s per task, 218 s total with concurrency 2 |
+| Direct inference latency | 3.3–5.8 s per 50–71-token reply (median 4.7 s) |
+| Token throughput | 12.3–15.4 tok/s (median 13.9), CPU only |
+| Peak resources | 648% CPU across 6 cores, 4.1 GiB RAM, no OOM, 0 restarts |
+| Prompt/handoff audit | 16 turns, 0 unrendered placeholders, all 4 personas, 0 empty replies |
+| Secret audit | 0 token occurrences, 0 key-shaped strings in 416 log lines |
+
+These are single-sample CPU numbers on one node; they are not a GPU, cloud or
+multi-node benchmark.
+
 ## Honest limits
 
 - **No cloud resource exists.** The OpenTofu modules format, validate and plan
   cleanly against the live tenancy (8 resources to add, 0 warnings), but nothing
   has been applied: no VCN, instance, volume or state file exists, and
   cloud-init has never run on a host.
-- **No model-quality or performance claim.** The suite runs against a scripted
-  model double; Stage 1 does not benchmark tokens/second, concurrency or
-  multi-node behaviour. Numbers will be recorded in the stage document that
-  measures them.
+- **Performance numbers are one model, one node, one sample each.** The unit
+  suite still runs against a scripted model double; Stage 4 measured a CPU-only
+  3B model and makes no claim about larger models, GPU throughput, concurrency
+  beyond two runs, or variance across runs.
+- **The code-review workflow cannot read source files.** The tool whitelist is
+  `calculator`/`text_stats`, so the coder persona reviews from the objective
+  text; its findings are generic and code-review recall is not claimed.
+- **Run records are not persisted.** They are returned in the HTTP response and
+  written to container logs, not to disk.
 - **Single node, single process.** Fan-out is concurrent *within* one run loop
-  today; distributing agents across nodes is Stage 3+.
+  today; distributing agents across nodes is Stage 6.
 - **The GPU override is unexecuted.** `docker/compose.vllm.yaml` is
   syntax-validated only; the development host has no GPU.
 - **No authentication beyond a shared bearer token.** Per-user identity and
@@ -258,7 +286,7 @@ AWS and GCP are supported ports, not certified targets.
 | 1 | Scaffold, Compose topology, personas, workflows, task schema, orchestration loop | unit tests, compose config, image build, local API surface — **done** (`docs/stage-1-verification.txt`) |
 | 2 | OCI network, inference node, block volume, cloud-init | `fmt`, `validate`, `plan` — **done** (`docs/stage-2-verification.txt`), not applied |
 | 3 | Agent guide and manual prerequisites | both documents complete, links valid — **done** |
-| 4 | Local evaluation: task success, latency, memory | measured recall/task metrics |
+| 4 | Local evaluation: task success, latency, memory | 3/3 workflows completed on 3B (CPU), measured latency/throughput/CPU/RAM, harness + log audit — **done** (`docs/stage-4-verification.txt`) |
 | 5 | Live OCI deployment | cloud-init done, volume mounted, healthy services, live run |
 | 6 | Scale and recovery (includes distributed fan-out and queueing across nodes) | load test, multi-node run record, restart drill |
 | 7 | Security audit, documentation, cost model | zero-leak audit signed off |

@@ -1,0 +1,189 @@
+Project — Multi-Agent Local LLM Swarm
+Stage 4 — local testing and verification
+Date: 2026-11-18
+Host: Windows workstation, 16 logical CPUs, Docker 29.8.1, 16 GB-class RAM
+Model: qwen2.5:3b-instruct (1.9 GB, Ollama 0.5.7, CPU only)
+Repository: https://github.com/kaveh8866/Multi-Agent-Local-LLM-Swarm
+Branch: main
+Harness: scripts/verify_local.py (new, committed)
+Raw report: runtime/stage4-report.json (gitignored)
+
+Scope: run the real stack, drive the real inference server, execute every
+workflow with concurrent tasks, and measure success, latency, throughput,
+memory and log hygiene. No code in src/ changed in this stage.
+
+1. Stack bring-up
+-----------------
+docker compose --env-file .env -f docker/docker-compose.yml up -d llm-runtime
+  Container cg-swarm-llm Created / Starting / Started
+  container health: healthy after 9s
+
+docker compose ... up -d --force-recreate swarm-orchestrator
+  endpoint /ready returned 200 after 4s
+
+Inference server identity (measured, not assumed):
+  /api/version -> 0.5.7-0-ga420a45-dirty
+  /api/ps      -> qwen2.5:3b-instruct, size 2.4 GB, processor 100% CPU
+  model pull   -> 1.9 GB, "verifying sha256 digest" + "writing manifest" +
+                  "success" (Ollama's own digest verification, not a mirror)
+
+Orchestrator /ready body:
+  {"status": "ready", "service": "swarm-orchestrator", "llm": "reachable",
+   "model": "qwen2.5:3b-instruct"}
+
+Health latency: /health 16.0 ms, /ready 0.0 ms (local, warm).
+
+2. Direct inference — latency and token throughput
+--------------------------------------------------
+Three sequential OpenAI-compatible calls (max_tokens 96) to the stack's port:
+
+  run 1: 5,782 ms, 71 completion tokens, 12.28 tok/s
+  run 2: 4,687 ms, 65 completion tokens, 13.87 tok/s
+  run 3: 3,250 ms, 50 completion tokens, 15.38 tok/s
+
+  median latency 4,687 ms, max 5,782 ms, median throughput 13.87 tok/s
+
+All three returned HTTP 200 with non-empty text; no 5xx, no timeout, no OOM.
+The spread is prompt-evaluation cost plus scheduling on a shared CPU
+(OLLAMA_CPUS=6, 16 logical CPUs). This is a 3B Q4 model on CPU: ~14 tok/s is
+the expected order of magnitude, not a defect.
+
+Earlier smoke model for comparison (qwen2.5:0.5b): cold 2,703 ms / 18.5 tok/s,
+warm 797 ms / 70.3 tok/s.
+
+3. Multi-agent collaboration and delegation
+-------------------------------------------
+Every task config was run concurrently (2 at a time, OLLAMA_NUM_PARALLEL=2),
+with the declared step budgets honoured (code_review 8, research_brief 8,
+reasoning_chain 10; SWARM_MAX_STEPS=12 is not the binding constraint).
+
+  task                          workflow         status      steps turns  wall
+  review-swarm-worker-auth      code_review      completed     5     5   46.5 s
+  size-a-swarm-topology         reasoning_chain  completed     6     6  218.2 s
+  research-local-llm-serving    research_brief   completed     5     5  166.2 s
+
+  success rate 3/3 = 1.0, agent wall-clock 218.2 s (longest task), 0 errors
+
+An earlier full 3B run on the same configuration also returned 3/3 completed
+(wall 220.3 s, peak 655.7% CPU, 4,092.2 MiB), so the 1.0 rate is reproduced,
+not a single lucky pass.
+
+Delegation evidence (run records):
+  code_review:     planner -> 3x coder (fan-out) -> critic verdict
+                   plan = [Correctness of authentication mechanisms,
+                           Security vulnerabilities in token handling,
+                           Bounded request size limitations]
+  research_brief:  planner -> 3x researcher (fan-out) -> critic synthesis
+                   plan asks three independent research questions
+  reasoning_chain: planner -> 4x researcher (fan-out) -> critic verification
+                   plan decomposes the wall-clock question into four steps
+
+All four personas (planner, researcher, coder, critic) were exercised, and the
+run records show real delegation rather than one long prompt: the plan stage's
+JSON array becomes one turn per planned subtask, and the final stage consumes
+the transcript.
+
+Output shape check (closing turn per workflow):
+  research brief  -> findings paragraph + explicit open questions + residual
+                     risk, no invented measurements ("exact memory footprints
+                     were not measured")
+  code review     -> blocking findings, non-blocking findings, one-line
+                     verdict, residual risk
+  reasoning chain -> unsupported steps, contradiction, missing evidence, best
+                     supported answer, confidence, residual risk
+
+4. Prompt rendering and handoff audit
+-------------------------------------
+Harness audit over the rendered instructions of every turn:
+
+  turns inspected            16
+  unrendered {placeholders}   0
+  empty responses             0
+  personas exercised          coder, critic, planner, researcher
+  tool observations           1 (calculator, used by the coder stage)
+
+Each instruction began with its expected rendered prefix ("Review target: …",
+"Overall objective: … Research question: …", "Question: …"), so the template
+variables ({objective}, {subtask}, {max_tasks}) were substituted before the
+model call.
+
+Known content limitation (not a handoff defect): the code_review workflow
+cannot read source files. The tool whitelist is calculator/text_stats only, so
+the coder persona reviews from the objective text. Its findings are therefore
+generic; code-review recall must not be claimed from this run.
+
+5. CPU and memory during concurrent inference
+---------------------------------------------
+Sampled `docker stats` every 2 s for the duration of the concurrent run
+(60 samples):
+
+  peak combined CPU        648.6%  (llm 612.1%, orchestrator 54.1%)
+  peak combined memory     4,130.2 MiB
+    cg-swarm-llm           4,071.4 MiB of the 12 GiB limit
+    cg-swarm-orchestrator     21.0 MiB of the 2 GiB limit
+  OOMKilled                false (both containers)
+  restart count            0 (both containers)
+
+6. Log and secret audit
+-----------------------
+Harness scanned the last 400 lines of both services:
+
+  lines scanned                 16 (orchestrator), 400 (llm-runtime)
+  orchestrator token hits        0
+  Authorization header lines     0
+  sk-/AKIA/ghp_/PEM/OCID hits    0
+  token present in report        false
+
+The worker log_message override is doing its job: request lines are logged
+without headers, so the bearer token never reaches stdout.
+
+Defect found and fixed in this stage: the local .env still carried the
+documented placeholder token (37 chars, "replace-with…"). It was rotated to a
+fresh 64-hex value, the orchestrator was recreated, and a request with a wrong
+bearer token returned 401 as expected. The value is never printed by the
+harness or written to the report.
+
+7. Defects found in the verification tooling itself
+---------------------------------------------------
+The harness caught two of its own bugs on first use, both fixed before the
+certified run:
+
+1. It defaulted to port 11434, which on this workstation is a *native* Ollama
+   instance with different models (gemma4:e2b, nomic-embed-text). The result was
+   a clean 404 ("model not found") that could easily be misread as a stack
+   fault. The harness now derives the URL from OLLAMA_PORT (11435 here) and is
+   documented to do so.
+2. It overwrote each task's declared max_steps with its --max-steps cap, which
+   forced reasoning_chain (declared 10) into budget_exhausted at 5 steps in the
+   first 0.5B pass. --max-steps is now an upper bound: effective budget is
+   min(declared, cap), matching the orchestrator's own budget rule.
+
+The 0.5B baseline pass (2/3 completed, 1 budget_exhausted, peak 623.7% CPU,
+821.5 MiB) is retained as a control; its only failure was the clamp above.
+
+8. Reproduce
+------------
+  docker compose --env-file .env -f docker/docker-compose.yml up -d
+  docker compose --env-file .env -f docker/docker-compose.yml \
+    exec llm-runtime ollama pull qwen2.5:3b-instruct
+  python scripts/verify_local.py --concurrency 2 --max-steps 10
+
+Exit status 0 means health 200/200, every direct completion 200, and every
+agent task completed. The JSON report is written to runtime/ (gitignored).
+
+9. Not verified at Stage 4
+--------------------------
+- No GPU run: the vLLM override was not exercised; all numbers are CPU.
+- No cloud run: this is the workstation only (OCI certification is Stage 5).
+- Single sample per workflow: three workflows, one run each per pass, so no
+  variance or confidence interval is claimed for task success.
+- No token accounting for agent runs: the orchestrator does not record usage,
+  so tok/s is measured on the direct endpoint, not per agent turn.
+- Run records are not persisted by the worker; they exist in the HTTP response
+  (captured in the report) and in container logs, not on disk.
+- Code-review quality is bounded by the missing file-read tool (see §4).
+
+10. CloudGuard
+--------------
+The portability audit is re-run by the vault after this commit; the result is
+reported with the Stage 4 handover.
