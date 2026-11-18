@@ -237,9 +237,34 @@ gitignored.
 
 10. CloudGuard registration
 ---------------------------
-The project is indexed by the CloudGuard portfolio scanner and attached to its
-own repository metadata (slug 10-multi-agent-local-llm-swarm), then audited by
-the official portability service. The audit result is recorded in section 11 of
-this file after it runs; it is structural evidence only — leak-free, documented,
-isolated and runnable — and says nothing about cloud deployment or model
-quality.
+The project was indexed by the CloudGuard portfolio scanner and attached to its
+own repository metadata:
+
+  slug       10-multi-agent-local-llm-swarm
+  name       Multi-Agent Local LLM Swarm
+  category   ai_pipeline
+  framework  Python
+  stack      docker, docker-compose, python, terraform
+  docker     true
+  iac        true (reserved terraform/ contract, no .tf resources yet)
+  branch     main
+  port       8090
+  remote     https://github.com/kaveh8866/Multi-Agent-Local-LLM-Swarm.git
+
+11. Portability certification
+-----------------------------
+The official CloudGuard portability audit ran against the committed tree with
+no uncommitted paths:
+
+  zero-leak audit           passed
+  environment scaffold      passed
+  documentation integrity   passed
+  git isolation             passed
+  containerization          passed
+
+  score   100/100 (5/5 checks)
+  status  PORTABLE_CERTIFIED
+
+The certification is structural: the repository is leak-free, self-describing,
+Git-isolated and runnable. It says nothing about cloud deployment, model quality
+or performance.
