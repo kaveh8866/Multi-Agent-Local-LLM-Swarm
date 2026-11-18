@@ -10,7 +10,8 @@
 [![Docker](https://img.shields.io/badge/packaging-Docker%20Compose-2496ED?logo=docker&logoColor=white)](docker/docker-compose.yml)
 [![OpenTofu](https://img.shields.io/badge/IaC-OpenTofu%201.13-844FBA?logo=opentofu&logoColor=white)](terraform/)
 ![OCI](https://img.shields.io/badge/certified%20on-Oracle%20Cloud-F80000?logo=oracle&logoColor=white)
-![Stage](https://img.shields.io/badge/stage-7%20%C2%B7%20audited%20%26%20documented-brightgreen)
+[![Release](https://img.shields.io/badge/release-v1.0.0-brightgreen)](https://github.com/kaveh8866/Multi-Agent-Local-LLM-Swarm/tree/v1.0.0)
+![Stage](https://img.shields.io/badge/stage-8%20%C2%B7%20released%20v1.0.0-blue)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 </div>
@@ -39,9 +40,11 @@ decision rather than a code change. Everything is packaged with Docker Compose,
 deployable on a workstation or on high-RAM ARM compute with a persistent block
 volume, and provisioned on OCI with OpenTofu.
 
-The project was built and verified in seven stages: scaffold → infrastructure
+The project was built and verified in eight stages: scaffold → infrastructure
 contract → operator docs → local evaluation → live OCI deployment → clean teardown →
-security audit, documentation and cost model. Every stage's measured evidence is in
+security audit, documentation and cost model → release finalisation. It is published
+at [`kaveh8866/Multi-Agent-Local-LLM-Swarm`](https://github.com/kaveh8866/Multi-Agent-Local-LLM-Swarm)
+under the MIT licence and tagged `v1.0.0`. Every stage's measured evidence is in
 [`docs/`](docs/), including the parts that did not go to plan.
 
 ## ✨ Features
@@ -491,6 +494,7 @@ API total, so no cloud bill is claimed anywhere in this repository.
 | 5 | Live OCI host: 3/3 workflows, 6.7–7.8 tok/s warm, 853% CPU peak, no OOM, volume-backed weights, reboot persistence | [docs/stage-5](docs/stage-5-verification.txt) |
 | 6 | Both stacks stopped, 8/8 resources destroyed, empty state, provider inventory 0 live | [docs/stage-6](docs/stage-6-verification.txt) |
 | 7 | Zero-leak audit signed off, README rewrite, cross-cloud cost model | [docs/stage-7](docs/stage-7-security-audit.txt) |
+| 8 | 9 commits on one canonical identity with no attribution trailers, identical trees, MIT licence, public `main`, tag `v1.0.0`, vault `PORTABLE_CERTIFIED` 100/100 | [docs/stage-8](docs/stage-8-release.txt) |
 
 ## ⚠️ Honest Limits
 
@@ -511,7 +515,7 @@ API total, so no cloud bill is claimed anywhere in this repository.
   container logs; the state bind mount is provisioned but the worker does not yet
   write run records to it.
 - **Single node, single process.** Fan-out is concurrent *within* one run loop;
-  distributing agents across nodes is future work (Stage 8).
+  distributing agents across nodes is future work (Stage 9, not started).
 - **The GPU override is unexecuted.** `docker/compose.vllm.yaml` is validated only;
   no GPU host was available, and vLLM was never driven by this orchestrator.
 - **No authentication beyond a shared bearer token.** No per-user identity, no audit
@@ -532,7 +536,8 @@ API total, so no cloud bill is claimed anywhere in this repository.
 | 5 | Live OCI deployment | cloud-init done, volume mounted, 3/3 workflows on the host — **done** |
 | 6 | Clean teardown and zero-resource verification | 8/8 destroyed, empty state, 0 live resources — **done** |
 | 7 | Security audit, README documentation, cost model | zero-leak audit signed off, cost table published — **done** |
-| 8 | Scale and recovery | load test, multi-node fan-out, restart/recovery drill |
+| 8 | Release finalisation: canonical history, MIT licence, public repository, tag, certification | 9 commits, zero attribution trailers, identical trees, public `main` at `v1.0.0`, vault 100/100 — **done** |
+| 9 | Scale and recovery | load test, multi-node fan-out, restart/recovery drill — **not started** |
 
 ## 📚 Documentation
 
@@ -542,6 +547,7 @@ API total, so no cloud bill is claimed anywhere in this repository.
 | [`AGENT_GUIDE.md`](AGENT_GUIDE.md) | AI-agent playbook: bring-up, monitoring, delegation debugging, failure table |
 | [`terraform/README.md`](terraform/README.md) | Module map, inputs/outputs, security posture, portability table |
 | [`docs/stage-7-security-audit.txt`](docs/stage-7-security-audit.txt) | Zero-leak audit, findings and sign-off |
+| [`docs/stage-8-release.txt`](docs/stage-8-release.txt) | Release record: history rewrite, licence, tag, push verification and vault certification |
 | [`docs/`](docs/) | Per-stage verification records, including failures and deviations |
 
 ## License

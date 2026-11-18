@@ -1,0 +1,244 @@
+================================================================================
+Project 10 — Multi-Agent Local LLM Swarm
+Stage 8 — Release Finalisation: History Rewrite, Licence, Tag & Push
+Release record and certification sign-off
+Date: 2026-11-18
+Operator: agent, on the operator's workstation (Git + GitHub CLI)
+Scope: the project's own Git repository, its GitHub remote and its vault record
+================================================================================
+
+RESULT
+------
+The project is a self-contained, independently versioned repository published at
+https://github.com/kaveh8866/Multi-Agent-Local-LLM-Swarm under the MIT licence and
+tagged `v1.0.0`. Nine commits sit on `main`, every one authored and committed by
+Mostafa Kaveh, with zero attribution trailers. The rewrite changed no file: the
+tree before and after is the same object hash. GitHub detects the licence as MIT,
+and the vault records the project as `PORTABLE_CERTIFIED` at 100/100.
+
+--------------------------------------------------------------------------------
+1. STARTING POINT
+--------------------------------------------------------------------------------
+The repository at `projects/10-multi-agent-local-llm-swarm` had its own `.git` and
+eight stage commits on `main`, but the run failed four release requirements:
+
+  - no licence file at all;
+  - commit author and committer were the generic tool identity `User`, not the
+    operator;
+  - every message ended in an AI attribution footer (12 matching lines across the
+    eight messages) — the project's own AGENT_GUIDE §14 forbids them;
+  - the GitHub remote held a single unrelated placeholder commit (`7c320df`,
+    "Initial commit") with its own root history, so no push of the local history
+    could ever fast-forward.
+
+Requirements for this stage, restated so the record is checkable:
+the repository independent, `origin` = the URL above, default branch `main`, MIT
+`LICENSE` with "Copyright (c) 2026 Mostafa Kaveh", commits authored as Kaveh with
+zero footers, a release commit, `main` pushed, `v1.0.0` published, and the vault
+row updated to `PORTABLE_CERTIFIED` 100/100.
+
+--------------------------------------------------------------------------------
+2. HISTORY REWRITE — WHAT CHANGED AND WHAT DID NOT
+--------------------------------------------------------------------------------
+The eight stage commits were re-created with `git filter-branch` (message filter +
+`--env-filter`) rather than squashed, because the per-stage commits are the evidence
+trail: each one maps to a `docs/stage-N` record. Rewriting kept that narrative and
+changed only metadata.
+
+  #  Subject (abridged)                                Before     After
+  1  feat(swarm): scaffold … hardened compose          ceeaf47    d2f811f
+  2  docs(swarm): stage 1 certification + live run     cb1dc55    b90b92b
+  3  feat(iac): OCI compute, block storage, VCN       861c593    d1dabcb
+  4  docs: manual prerequisites + agent guide         76b36e5    57ea5ae
+  5  test(agent-swarm): local eval + delegation       824140a    d70ba83
+  6  feat(deploy): live OCI provision + verify        a92de50    f13825d
+  7  chore(teardown): destroy infra, zero burn        1dd8496    14cdd4b
+  8  docs: README, audit sign-off, cost breakdown     168fea1    4903e2d
+  9  feat: initial enterprise-grade release                        b52964c
+
+Why the old hashes still exist locally: the pre-rewrite tip is kept as the local
+branch `backup/pre-stage8` (pointing at `168fea1`). It is **not** pushed, so the
+published repository has exactly one history. The old hashes are listed here from
+that ref so the rewrite is auditable; no tracked document cites them as current.
+
+--------------------------------------------------------------------------------
+3. IDENTITY AND FOOTER VERIFICATION
+--------------------------------------------------------------------------------
+  $ git log --format='%an <%ae> | %cn <%ce>'
+  all nine: Mostafa Kaveh <82622243+kaveh8866@users.noreply.github.com>
+
+  before:  an=User <82622243+kaveh8866@users.noreply.github.com>  (author and
+           committer, all eight stage commits)
+  after:   an=cn="Mostafa Kaveh" on all nine, including the tagger of v1.0.0
+
+  $ git log --format='%B' | grep -cE 'Co-Authored-By|Generated with|noreply@codebuff'
+  0
+  (the same pattern counted 12 lines before the rewrite)
+
+The email is the operator's GitHub noreply address, which is why GitHub attributes
+all nine commits to `kaveh8866` without exposing a private address in the history.
+
+--------------------------------------------------------------------------------
+4. TREE EQUALITY — THE REWRITE WAS METADATA-ONLY
+--------------------------------------------------------------------------------
+  $ git rev-parse 4903e2d^{tree}          # stage 7 tip, after rewrite
+  7f43ca75df849007772f0d6c33052ffa7b0b370d
+  $ git rev-parse backup/pre-stage8^{tree} # stage 7 tip, before rewrite
+  7f43ca75df849007772f0d6c33052ffa7b0b370d
+
+Identical object hashes: the rewrite changed no blob, no path and no permission.
+The release commit is the only commit after it:
+
+  $ git rev-parse HEAD^{tree}
+  f88ec31cdaa1ec52d96be4e849eafd3280aa4217
+
+  f88ec31 differs from 7f43ca7 only by the added `LICENSE` blob (§5).
+
+--------------------------------------------------------------------------------
+5. LICENCE AND THE RELEASE COMMIT
+--------------------------------------------------------------------------------
+  $ cat LICENSE | head -3
+  MIT License
+
+  Copyright (c) 2026 Mostafa Kaveh
+
+Standard MIT text, the required holder line, tracked at the repository root and
+referenced from the README badge and its closing section.
+
+  $ git show --stat --oneline b52964c
+  b52964c feat: initial enterprise-grade release of Multi-Agent Local LLM Swarm (Project 10)
+   LICENSE | 21 +++++++++++++++++++++
+   1 file changed
+
+The message states the why (a first enterprise-grade, certified release) and carries
+no trailer, matching AGENT_GUIDE §14 and the repository's commit style.
+
+--------------------------------------------------------------------------------
+6. TAG
+--------------------------------------------------------------------------------
+  $ git tag -l v1.0.0
+  v1.0.0
+  $ git cat-file -t v1.0.0
+  tag
+  $ git rev-parse v1.0.0 v1.0.0^{}
+  9fcf4bc7cfbd6f60aea6dbd7f11d90630903f4f3   (annotated tag object)
+  b52964c44fb7a055fa1fd8ec090615263be4190e   (peeled commit)
+
+  tagger: Mostafa Kaveh <82622243+kaveh8866@users.noreply.github.com> 1795035423 +0100
+  message: v1.0.0 — first certified release (PORTABLE_CERTIFIED 100/100,
+           OCI-verified, torn down to zero)
+
+An annotated tag, not a lightweight one, so the release carries an author, a date
+and a message of its own.
+
+--------------------------------------------------------------------------------
+7. PUSH AND REMOTE VERIFICATION
+--------------------------------------------------------------------------------
+Because the remote root (`7c320df`) is unrelated to the local root (`d2f811f`), a
+normal push is rejected as a non-fast-forward. The rewrite was pushed with an
+explicit lease so the update could not silently overwrite newer remote work:
+
+  $ git push --force-with-lease origin main
+   + 7c320df...b52964c main -> main (forced update)
+  $ git push origin v1.0.0
+   * [new tag] v1.0.0 -> v1.0.0
+
+  $ gh repo view kaveh8866/Multi-Agent-Local-LLM-Swarm \
+      --json visibility,defaultBranchRef,isPrivate
+  { "default": "main", "private": false, "visibility": "PUBLIC" }
+
+  $ git rev-parse HEAD origin/main
+  b52964c44fb7a055fa1fd8ec090615263be4190e
+  b52964c44fb7a055fa1fd8ec090615263be4190e
+
+  $ git status --short
+  (no output)
+
+Local and remote are the same commit, the working tree is clean, the default branch
+is `main` and the repository is public.
+
+**Licence detection.** GitHub's detector reads the pushed file, not just its name:
+
+  $ gh api repos/kaveh8866/Multi-Agent-Local-LLM-Swarm/license \
+      -q '{spdx:.license.spdx_id,name:.license.name,path:.path}'
+  {"name":"MIT License","path":"LICENSE","spdx":"MIT"}
+
+So the remote's licence badge and the repository's licence field resolve to MIT
+from the same blob the tree equality in §4 covers. (One intermediate check of the
+`licenseInfo` field on `gh repo view` came back empty; the dedicated licence
+endpoint above is the authoritative answer and is what this record relies on.)
+
+**No GitHub Release object.** `v1.0.0` is a pushed annotated tag; no Release entry
+was created, so the tag page has no release notes body. The tag is the released
+artefact this record certifies.
+
+--------------------------------------------------------------------------------
+8. VAULT CERTIFICATION
+--------------------------------------------------------------------------------
+  $ npx tsx projects/10-multi-agent-local-llm-swarm/runtime/register-and-audit.ts
+
+  status              PORTABLE_CERTIFIED
+  portability_score   100
+  passed_checks       5 / 5
+  issues              []
+  is_git_repo         1        current_branch  main
+  remote_url          https://github.com/kaveh8866/Multi-Agent-Local-LLM-Swarm.git
+  has_uncommitted     0
+  last_commit_hash    b52964c44fb7a055fa1fd8ec090615263be4190e
+  last_commit_msg     feat: initial enterprise-grade release of Multi-Agent Local
+                      LLM Swarm (Project 10)
+
+Checks: zero-leak audit, environment scaffold, documentation integrity, Git
+isolation, containerisation readiness — all five passed, so the score is 100/100.
+The zero-leak check is the Stage 7 audit re-run against the published tree, not a
+new claim: it still finds no weight, key, state, `.env`, database, log or real OCID
+in the index.
+
+--------------------------------------------------------------------------------
+9. WHAT STAGE 8 DID NOT DO
+--------------------------------------------------------------------------------
+  - No deployment. Publishing re-deployed nothing; Stage 6's destroyed state and
+    zero live resources still hold, and the Stage 5 numbers remain historical.
+  - No GitHub Release object (tag only — see §7).
+  - No billing figure. Costs remain list prices with derivation (Stage 7); no
+    invoice or billing-API total was read.
+  - No AWS or GCP run. Those ports stay documentation-only and uncertified.
+  - No scale work. The load test, multi-node fan-out and restart/recovery drill
+    that the pre-release roadmap pencilled in as "Stage 8" move to Stage 9 and are
+    **not started**.
+  - `backup/pre-stage8` remains a local-only ref; delete it when the old hashes are
+    no longer wanted (`git branch -D backup/pre-stage8`).
+
+--------------------------------------------------------------------------------
+10. REPRODUCE THE VERIFICATION (READ-ONLY)
+--------------------------------------------------------------------------------
+  cd projects/10-multi-agent-local-llm-swarm
+
+  git log --oneline                      # 9 commits, all one identity
+  git log --format='%an <%ae> | %cn <%ce>' | sort -u
+  git log --format='%B' | grep -cE 'Co-Authored-By|Generated with'
+  git rev-parse HEAD origin/main          # identical
+  git rev-parse HEAD^{tree} v1.0.0^{tree} # identical
+  git cat-file -t v1.0.0                  # tag
+  head -3 LICENSE                         # MIT, 2026 Mostafa Kaveh
+  gh repo view kaveh8866/Multi-Agent-Local-LLM-Swarm \
+    --json visibility,defaultBranchRef,isPrivate
+
+Exit criteria: one identity, zero footer matches, local == remote, tree at `HEAD`
+equals the tree at the tag, annotated tag present, MIT licence, remote public on
+`main`.
+
+Note: `HEAD` and `v1.0.0` diverge once commits land after the release tag — the
+equality above is true of the release as tagged, and later documentation commits are
+deliberately allowed to move `main` forward without re-tagging.
+
+================================================================================
+SIGN-OFF
+Release: PASS. Repository independent with `origin` set, public on `main` at
+`b52964c`, MIT licence held by Mostafa Kaveh and detected as MIT by GitHub, nine
+commits on one canonical identity with zero attribution trailers, tree byte-identical
+across the rewrite, annotated tag `v1.0.0` pushed, vault `PORTABLE_CERTIFIED` 100/100
+with 5/5 checks and a clean working tree. Limitations recorded: no GitHub Release
+object exists, nothing was re-deployed, and the scale/recovery stage moved to Stage 9
+unstarted.
+================================================================================

@@ -6,11 +6,12 @@ what to run, in what order, what healthy looks like, how to inspect a run, and
 what is verified versus assumed.
 
 > **Read section 13 before making any availability or certification claim.**
-> Stage 1 (scaffold, orchestration loop, local API) and Stage 2 (OpenTofu OCI
-> modules, validated and planned) exist. **No cloud resource has been applied**
-> and no model has been benchmarked. The human operator checklist lives in
-> [`MANUAL_PREREQS.md`](MANUAL_PREREQS.md) — point the user there for credentials,
-> keys, model licences and `.env`.
+> All eight stages are complete and the repository is published at `v1.0.0`: an
+> OCI host was really provisioned (Stage 5) and destroyed (Stage 6), the security
+> audit is signed off (Stage 7) and the release is tagged (Stage 8). **Nothing is
+> running now** — re-apply before any live check. The human operator checklist
+> lives in [`MANUAL_PREREQS.md`](MANUAL_PREREQS.md) — point the user there for
+> credentials, keys, model licences and `.env`.
 
 ## 1. Current state
 
@@ -22,8 +23,9 @@ what is verified versus assumed.
 | Orchestration loop, tool gateway, budgets | 33 unit tests | `tests/test_scaffold.py` |
 | Live multi-agent run on a local model | `completed`, 5 calls, 12.7 s (qwen2.5:0.5b) | `docs/stage-1-verification.txt` |
 | OCI infrastructure modules | `fmt`, `validate`, read-only plan (8 to add) | `docs/stage-2-verification.txt` |
-| OCI resources | **None applied** — no state file exists | — |
-| Live cloud deployment | **None** | — |
+| OCI resources | Applied Stage 5, destroyed Stage 6 — state empty, 0 live | `docs/stage-5-verification.txt`, `docs/stage-6-verification.txt` |
+| Live cloud deployment | Historical (Stage 5); none running now | `docs/stage-5-verification.txt` |
+| Public release | 9 commits, no attribution trailers, MIT, tag `v1.0.0`, vault 100/100 | `docs/stage-8-release.txt` |
 
 ## 2. What this project is
 
@@ -435,6 +437,12 @@ zero live project-owned resources (`docs/stage-6-verification.txt`). The Stage 5
 numbers are historical measurements of a deployment that no longer exists: never
 present them as a live endpoint, and re-apply before any new live check.
 
+**Stage 8 published it.** Nine commits carry one canonical identity and no
+attribution trailers, the licence is MIT, and `v1.0.0` is pushed to a public
+`main` (`docs/stage-8-release.txt`). The vault records the project as
+`PORTABLE_CERTIFIED` at 100/100. Publishing re-deployed nothing: Stage 6's
+zero-resource state still holds.
+
 **Certification scope.** Final production verification and testing certification
 for this project are performed strictly on **Oracle Cloud Infrastructure**, using
 trial credits with high-RAM **Ampere ARM** instances (`VM.Standard.A1.Flex`,
@@ -464,11 +472,12 @@ or implied.
 | 5 | Live OCI deployment | healthy host, block volume consumed by the stack, 3/3 workflows on the host — **done** (`docs/stage-5-verification.txt`) |
 | 6 | Clean teardown and zero-resource verification | stacks down, `tofu destroy` 8/8, empty state, provider inventory clean — **done** (`docs/stage-6-verification.txt`) |
 | 7 | Security audit, documentation, cost model | zero-leak audit signed off, README and cost table published — **done** (`docs/stage-7-security-audit.txt`) |
-| 8 | Scale and recovery | load test, restart/recovery drill |
+| 8 | Release finalisation: canonical history, licence, tag, certification | public `main` at `v1.0.0`, 9 commits, 0 trailers, vault 100/100 — **done** (`docs/stage-8-release.txt`) |
+| 9 | Scale and recovery | load test, restart/recovery drill — **not started** |
 
 > Distributed fan-out and queueing across nodes was originally pencilled in as
-> Stage 3; it moved to Stage 8 (scale) so the documentation stage keeps its
-> original place in the roadmap.
+> Stage 3; it moved to Stage 9 (scale) so the documentation and release stages
+> keep their original place in the roadmap.
 
 ## 16. Handoff checklist
 
