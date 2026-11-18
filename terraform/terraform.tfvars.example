@@ -1,28 +1,102 @@
 # =============================================================================
-# OpenTofu variables — placeholder template (copy to terraform.tfvars)
+# Multi-Agent Local LLM Swarm — tfvars template
 # =============================================================================
-# `terraform.tfvars` is gitignored. Never commit tenancy or compartment OCIDs,
-# key fingerprints or API key paths.
+# Copy to terraform.tfvars (gitignored) and replace every placeholder:
 #
-#   cp terraform/terraform.tfvars.example terraform/terraform.tfvars
+#   cp terraform.tfvars.example terraform.tfvars
+#   chmod 600 terraform.tfvars
+#
+# Nothing here is a working value: the OCIDs are placeholders, the CIDRs are
+# RFC 5737 documentation ranges, and the SSH key is not a valid key. Never
+# commit terraform.tfvars.
 
-tenancy_ocid     = "ocid1.tenancy.oc1..replace-me"
-user_ocid        = "ocid1.user.oc1..replace-me"
-fingerprint      = "replace-with-api-key-fingerprint"
-private_key_path = "replace-with-path-to-oci-api-private-key"
+# -----------------------------------------------------------------------------
+# OCI identity — real OCIDs belong only in terraform.tfvars
+# -----------------------------------------------------------------------------
+
+tenancy_ocid     = "ocid1.tenancy.oc1..replace-with-your-tenancy-ocid"
+compartment_ocid = "ocid1.compartment.oc1..replace-with-your-compartment-ocid"
 region           = "eu-frankfurt-1"
-compartment_ocid = "ocid1.compartment.oc1..replace-me"
 
-project_name     = "llm-swarm"
-ssh_public_key   = "ssh-ed25519 AAAAreplace-me operator@workstation"
-operator_cidr    = "203.0.113.10/32"
+# API-key auth. Leave these null to use ~/.oci/config (recommended on a
+# workstation). A CI runner sets user_ocid/fingerprint/private_key_path from its
+# secret store instead; the key path must live outside this repository.
+config_file_profile = "DEFAULT"
+user_ocid           = null
+fingerprint         = null
+private_key_path    = null
 
-# Inference node: a quantised 3B model needs roughly 3 GB resident, an 8B model
-# roughly 6–8 GB. Keep the free-tier-friendly Ampere shape as the default.
-inference_shape  = "VM.Standard.A1.Flex"
-inference_ocpus  = 4
-inference_memory_gb = 24
+# -----------------------------------------------------------------------------
+# Naming
+# -----------------------------------------------------------------------------
 
-# Persistent volume for model weights, agent state and run records.
-data_volume_size_gb = 200
-data_volume_mount   = "/mnt/llm-swarm"
+project_name = "llm-swarm"
+environment  = "dev"
+
+freeform_tags = {
+  project  = "multi-agent-local-llm-swarm"
+  owner    = "cloudguard"
+  tier     = "high-spec"
+  workload = "local-llm-agents"
+}
+
+# -----------------------------------------------------------------------------
+# Network — replace the documentation ranges with the operator's real CIDRs
+# -----------------------------------------------------------------------------
+
+vcn_cidr    = "10.10.0.0/16"
+subnet_cidr = "10.10.1.0/24"
+
+# Operator workstation or VPN range for SSH.
+ssh_allowed_cidrs = ["203.0.113.10/32"]
+
+# Operator range allowed to reach the inference API and task API. Prefer a VPN
+# range; a public /32 is acceptable only for a short verification window.
+llm_api_cidrs = ["203.0.113.10/32"]
+
+# Ollama OpenAI-compatible API (11434) and swarm task API (8090).
+# GPU/vLLM native port would be 8000 instead. Never add 0.0.0.0/0 as a source.
+llm_ports = [11434, 8090]
+
+# -----------------------------------------------------------------------------
+# Compute — 4 OCPU / 24 GB is the Always Free A1 ceiling
+# -----------------------------------------------------------------------------
+
+instance_shape      = "VM.Standard.A1.Flex"
+instance_ocpus      = 4
+instance_memory_gbs = 24
+
+# Credit-funded step-up for an 8B model (raise both, then re-plan):
+# instance_ocpus      = 8
+# instance_memory_gbs = 64
+
+# 100 GB boot holds the OS, Docker and container images only. Model weights
+# live on the data volume.
+boot_volume_size_gbs = 100
+
+# Pin an AD when A1 is capacity constrained: e.g. "jiTx:EU-FRANKFURT-1-AD-2".
+# availability_domain = null
+
+hostname_label = "llmswarm"
+
+# Public key CONTENT (not a path). Generate a dedicated key pair:
+#   ssh-keygen -t ed25519 -f ~/.ssh/llm-swarm -C "llm-swarm"
+#   cat ~/.ssh/llm-swarm.pub
+ssh_public_key = "ssh-ed25519 PLACEHOLDER_PUBLIC_KEY operator@example.invalid"
+
+# Optional: pin an image OCID for reproducible rebuilds.
+# image_id                       = "ocid1.image.oc1..replace-with-image-ocid"
+image_operating_system         = "Canonical Ubuntu"
+image_operating_system_version = "24.04"
+
+# -----------------------------------------------------------------------------
+# Persistent block storage
+# -----------------------------------------------------------------------------
+
+# Holds model weights, inference caches and agent run records.
+# Always Free covers 200 GB TOTAL: boot 100 + data 200 consumes trial credit.
+block_volume_size_gbs    = 200
+block_volume_vpus_per_gb = 10
+
+volume_attachment_type = "paravirtualized"
+volume_mount_point     = "/mnt/llm-swarm"

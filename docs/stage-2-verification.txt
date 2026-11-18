@@ -1,0 +1,152 @@
+Project — Multi-Agent Local LLM Swarm
+Stage 2 — IaC provisioning with OpenTofu (OCI)
+Date: 2026-11-18
+Host: Windows workstation, OpenTofu 1.13.9 (windows_amd64)
+Repository: https://github.com/kaveh8866/Multi-Agent-Local-LLM-Swarm
+Branch: main
+
+Scope of this stage: the OpenTofu configuration that provisions the swarm's
+network, high-memory compute instance and persistent block volume on Oracle
+Cloud Infrastructure, with a provider-neutral variable/output contract.
+This stage verifies the configuration. It does not create cloud resources: no
+`tofu apply` was run, so no instance, VCN, volume or state file exists.
+
+Provider and tooling observed
+-----------------------------
+OpenTofu          1.13.9 (windows_amd64)
+Provider          oracle/oci 7.32.0 (constraint >= 6.20.0, < 8.0.0)
+Region            eu-frankfurt-1
+Python            3.11.9 (not used by this stage)
+Docker            29.8.1 (not used by this stage)
+
+1. Formatting
+-------------
+tofu fmt -recursive
+  exit 0
+
+tofu fmt -recursive -check
+  exit 0
+  (17 .tf files formatted: 5 in the root module and 4 per module; the
+   cloud-init template is not HCL and is not formatted by tofu)
+
+2. Initialisation
+-----------------
+tofu init -input=false -no-color
+  exit 0
+  "OpenTofu has been successfully initialized!"
+  provider plugin downloaded and recorded in .terraform.lock.hcl (committed)
+  three local modules loaded (network, compute, storage)
+
+3. Validation
+-------------
+tofu validate -no-color
+  Success! The configuration is valid.
+  exit 0
+
+Validation resolves every module input/output wiring, the provider address
+(modules pin `providers = { oci = oci }` so the child cannot infer
+hashicorp/oci while the root uses oracle/oci), all variable validation blocks
+and the template variables in cloud-init.
+
+4. Read-only plan (real OCI API, no resources created)
+-----------------------------------------------------
+tofu plan -input=false -out=stage2.tfplan
+
+  exit 0
+  Plan: 8 to add, 0 to change, 0 to destroy.
+
+Resources in the plan:
+  module.network.oci_core_vcn.this
+  module.network.oci_core_internet_gateway.this
+  module.network.oci_core_route_table.public
+  module.network.oci_core_security_list.public
+  module.network.oci_core_subnet.public
+  module.compute.oci_core_instance.this
+  module.storage.oci_core_volume.llm
+  module.storage.oci_core_volume_attachment.llm
+
+Data sources read during apply (values unknown at plan time):
+  module.compute.data.oci_core_vnic_attachments.this
+  module.compute.data.oci_core_vnic.primary
+
+Values resolved by the plan against the live tenancy:
+  availability domain   jiTx:EU-FRANKFURT-1-AD-1 (first AD; variable overrides)
+  instance shape        VM.Standard.A1.Flex
+  shape_config          4 OCPU / 24 GB (Flex shape, dynamic block)
+  image                 aarch64 Canonical Ubuntu 24.04 resolved for the shape
+                        (OCID present in the plan; not reproduced here)
+  instance_public_ip    (known after apply)
+  ingress ports         22, 11434, 8090 from the operator CIDR only
+  ingress exposure      one port/source pair per configured port; no
+                        0.0.0.0/0 anywhere (rejected by variable validation)
+
+Warnings: 0.
+
+The plan used a local terraform.tfvars derived from the operator's existing
+CloudGuard OCI profile (gitignored, mode 600). Its values — tenancy,
+compartment, API-key path and operator CIDRs — are not recorded in this file,
+the repository or the state, because no state was written.
+
+5. Contract highlights
+----------------------
+- VCN 10.10.0.0/16, public subnet 10.10.1.0/24, dedicated internet gateway and
+  route table; the VCN default tables are not mutated.
+- Security list: inbound 22 and llm_ports only from the configured CIDRs;
+  outbound 80/443 (packages, images, model weights) and 53/udp (DNS) only.
+  Variable validation rejects 0.0.0.0/0 and ::/0 at plan time.
+- Compute: flexible-shape dynamic block (shape_config only for Flex shapes),
+  Ubuntu image resolved per shape architecture, public IP on the primary VNIC,
+  cloud-init in `metadata.user_data`.
+- Storage: 200 GB Balanced volume in the instance's availability domain,
+  paravirtualized attachment, mounted by ext4 label `llmswarm` with a `nofail`
+  fstab entry and a retrying systemd unit.
+- cloud-init prepares `models/`, `cache/` (root-owned, for the Ollama container)
+  and `state/` (uid 10001, for the orchestrator) on the data volume. It carries
+  no credential.
+- Outputs expose the public IP, volume id/attachment/device/size/mount point,
+  VCN/subnet/security-list ids, the ingress inventory, the loopback endpoints
+  and an SSH command.
+
+6. Portability
+--------------
+The root variables and outputs are provider neutral (region, vcn_cidr,
+subnet_cidr, ssh_allowed_cidrs, llm_api_cidrs, llm_ports, instance_shape and
+sizing, block_volume_size_gbs, volume_mount_point). Porting to AWS or GCP
+replaces `provider.tf` and the three module bodies:
+
+  network  VCN/IGW/route table/security list/subnet
+             -> VPC/IGW/route table/security group/subnet (AWS)
+             -> VPC network/firewall rule/subnetwork (GCP)
+  compute  oci_core_instance A1.Flex
+             -> aws_instance t4g.xlarge
+             -> google_compute_instance t2a-standard-4
+  storage  oci_core_volume + attachment
+             -> aws_ebs_volume gp3 + attachment
+             -> google_compute_disk pd-balanced + attached disk
+
+Only OCI is validated; AWS and GCP remain documented ports.
+
+7. Defects found and fixed during verification
+----------------------------------------------
+- None in the configuration. The first attempt to build a local tfvars used a
+  relative path one directory short (`../09-...` instead of `../../09-...`);
+  the copy failed, no file was written, and the corrected path produced the
+  file used for the plan. This is an operator-command slip, not a module
+  defect.
+
+8. Not verified at Stage 2
+--------------------------
+- No `tofu apply`: nothing exists in OCI. Capacity for `VM.Standard.A1.Flex`
+  is only proven by a successful apply, and A1 capacity is often exhausted;
+  `availability_domain` is the documented escape hatch.
+- cloud-init is not executed until an instance boots. The volume discovery,
+  first-boot mkfs, fstab entry, systemd unit and directory ownership are
+  therefore unproven on a real host.
+- The block volume attachment path `/dev/oracleoci/oraclevdb` is the
+  documented paravirtualized device, not an observed one.
+- No SSH, Docker install, stack deployment or model download was performed;
+  those are Stage 5.
+- No cost measurement. The plan's 8 resources are list-price billable except
+  for the Always Free A1 allowance and the first 200 GB of block storage.
+- The Stage 5 Compose override that bind-mounts `/mnt/llm-swarm` into the
+  containers does not exist yet; today the stack uses named Docker volumes.

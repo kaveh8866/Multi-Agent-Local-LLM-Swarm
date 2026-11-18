@@ -1,0 +1,136 @@
+#cloud-config
+# =============================================================================
+# Swarm host bootstrap — block volume and data layout only
+# =============================================================================
+# This template prepares persistent storage. It does not install Docker, clone
+# the repository or create a .env: those are deployment-stage actions performed
+# over SSH, so no credential ever enters instance metadata.
+#
+# Device discovery:
+#   paravirtualized        -> /dev/oracleoci/oraclevdb (first data volume)
+#   Ampere A2 / some images -> plain /dev/sdb or /dev/vdb (no oracleoci udev
+#   alias until oracle-cloud-agent is installed, so a fallback enumerates every
+#   disk that is not the boot disk)
+#   NVMe shapes            -> /dev/nvme1n1
+# A device that already carries a filesystem is reused, never reformatted.
+# The volume is mounted by ext4 label so it survives device-name reordering.
+#
+# The systemd unit retries on every boot because OCI can finish attaching the
+# volume after cloud-init's first pass.
+
+write_files:
+  - path: /usr/local/sbin/mount-llm-swarm
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      # Mount the persistent model-weight and agent-state volume. Safe to re-run.
+      set -euo pipefail
+
+      MOUNT_POINT="${mount_point}"
+      VOLUME_LABEL="${volume_label}"
+      PROJECT_NAME="${project_name}"
+
+      log() { echo "llm-swarm: $*"; }
+
+      usable_disk() {
+        local candidate="$1" existing_type
+        [ -b "$candidate" ] || return 1
+        # Never touch a config drive or an ISO.
+        existing_type="$(blkid -s TYPE -o value "$candidate" 2>/dev/null || true)"
+        if [ "$existing_type" = "vfat" ] || [ "$existing_type" = "iso9660" ]; then
+          return 1
+        fi
+        # Skip the disk that carries the mounted root filesystem.
+        if lsblk -no MOUNTPOINT "$candidate" 2>/dev/null | grep -q .; then
+          return 1
+        fi
+        echo "$candidate"
+        return 0
+      }
+
+      discover_device() {
+        local candidate root_disk
+        for candidate in /dev/oracleoci/oraclevdb /dev/oracleoci/oraclevdc /dev/nvme1n1; do
+          if usable_disk "$candidate"; then return 0; fi
+        done
+
+        # Fallback for images without the oracleoci udev aliases: every whole
+        # disk except the one holding / (e.g. /dev/sdb on Ampere A2).
+        root_disk="/dev/$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" | head -1)"
+        for candidate in $(lsblk -dpno NAME,TYPE | awk '$2 == "disk" {print $1}'); do
+          [ "$candidate" = "$root_disk" ] && continue
+          if usable_disk "$candidate"; then return 0; fi
+        done
+        return 1
+      }
+
+      DEVICE=""
+      for attempt in $(seq 1 36); do
+        if DEVICE="$(discover_device)"; then
+          break
+        fi
+        log "waiting for the attached block device (attempt $attempt/36)"
+        sleep 5
+      done
+
+      if [ -z "$DEVICE" ]; then
+        log "no data block device found; the volume is probably not attached yet" >&2
+        exit 1
+      fi
+
+      mkdir -p "$MOUNT_POINT"
+
+      FSTYPE="$(blkid -s TYPE -o value "$DEVICE" 2>/dev/null || true)"
+      if [ -z "$FSTYPE" ]; then
+        log "formatting $DEVICE as ext4 with label $VOLUME_LABEL (first boot)"
+        mkfs.ext4 -q -L "$VOLUME_LABEL" "$DEVICE"
+      fi
+
+      if ! mountpoint -q "$MOUNT_POINT"; then
+        if ! grep -q "LABEL=$VOLUME_LABEL $MOUNT_POINT" /etc/fstab; then
+          printf 'LABEL=%s %s ext4 defaults,nofail,noatime 0 2\n' "$VOLUME_LABEL" "$MOUNT_POINT" >> /etc/fstab
+        fi
+        mount -a
+      fi
+
+      # Layout for the compose stack on a cloud host: model weights and the
+      # inference cache are written by the Ollama container (runs as root),
+      # while agent run records are written by the orchestrator (uid 10001).
+      # Ownership is set here because a read-only container rootfs cannot chown
+      # a mounted host path at runtime.
+      mkdir -p "$MOUNT_POINT/models" "$MOUNT_POINT/cache" "$MOUNT_POINT/state"
+      chown -R 0:0 "$MOUNT_POINT/models" "$MOUNT_POINT/cache"
+      chmod 750 "$MOUNT_POINT/models" "$MOUNT_POINT/cache"
+      chown -R 10001:10001 "$MOUNT_POINT/state"
+      chmod 750 "$MOUNT_POINT/state"
+
+      # Operators manage the stack without root, but only the mount root.
+      chown 1000:1000 "$MOUNT_POINT"
+
+      log "$DEVICE mounted at $MOUNT_POINT for $PROJECT_NAME"
+
+  - path: /etc/systemd/system/llm-swarm-mount.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Mount the CloudGuard multi-agent swarm data volume
+      After=network-online.target
+      Wants=network-online.target
+      ConditionPathExists=/usr/local/sbin/mount-llm-swarm
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/mount-llm-swarm
+      RemainAfterExit=yes
+      TimeoutStartSec=300
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, llm-swarm-mount.service]
+
+final_message: "llm-swarm: storage bootstrap finished; run `systemctl status llm-swarm-mount` to confirm the mount"

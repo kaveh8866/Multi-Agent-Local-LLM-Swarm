@@ -5,8 +5,9 @@ terminal agent) picking up this repository. It states what to run, in what
 order, what healthy looks like, and what is verified versus assumed.
 
 > **Read section 11 before making any availability or certification claim.**
-> Only Stage 1 exists: the scaffold, the orchestration loop and the local API
-> surface are verified. No cloud resource exists and no model was benchmarked.
+> Stage 1 (scaffold, orchestration loop, local API) and Stage 2 (OpenTofu OCI
+> modules, validated and planned) exist. **No resource has been applied** and no
+> model was benchmarked.
 
 ## 1. Current state
 
@@ -15,8 +16,9 @@ order, what healthy looks like, and what is verified versus assumed.
 | Repository scaffold, personas, workflows, task schema | Verified locally | `docs/stage-1-verification.txt` |
 | Container topology (canonical + root entrypoint + GPU override) | `docker compose config -q` exit 0 | `docs/stage-1-verification.txt` |
 | Orchestrator image build | Verified locally | `docs/stage-1-verification.txt` |
-| Orchestration loop, tool gateway, budgets | 31 unit tests | `tests/test_scaffold.py` |
-| OCI infrastructure | **Not started** — `terraform/` is a contract only | — |
+| Orchestration loop, tool gateway, budgets | 33 unit tests | `tests/test_scaffold.py` |
+| OCI infrastructure modules | `fmt`, `validate` and a read-only plan (8 to add) | `docs/stage-2-verification.txt` |
+| OCI resources | **None applied** — no state file exists | — |
 | Live deployment | **None** | — |
 
 ## 2. What this project is
@@ -54,7 +56,7 @@ task JSON → validate → planner → delegated stages (single | fanout)
 | `src/swarm/cli.py` | `python -m swarm` |
 | `configs/` | Personas, prompts, workflows, task schema and examples |
 | `tests/test_scaffold.py` | Unit suite (stdlib + PyYAML) |
-| `terraform/` | Stage 2 contract — no `.tf` files yet |
+| `terraform/` | OpenTofu OCI modules (network, compute, storage) + cloud-init |
 
 ## 4. Preflight
 
@@ -66,6 +68,9 @@ python -c "import yaml; print(yaml.__version__)"
 docker version --format '{{.Server.Version}}'
 docker compose version
 python -m unittest discover -s tests -q
+
+# IaC (OpenTofu >= 1.6; this workspace ships it in .cloudguard/tools/tofu)
+cd terraform && tofu fmt -recursive -check && tofu validate && cd ..
 ```
 
 If the tree is dirty, stop and report it. Do not "clean up" someone else's work.
@@ -199,9 +204,10 @@ docker compose --env-file .env -f docker/docker-compose.yml logs --tail=200 llm-
 The container contract is cloud-agnostic. `terraform/` will implement OCI in
 Stage 2; AWS and GCP are supported ports, not certified targets.
 
-**Status.** Stage 1 is local only. No instance, network or volume exists. Do not
-describe the project as deployed, highly available, benchmarked or
-production-ready; stages 2–7 are the ones that earn those words.
+**Status.** Stage 1 is local only and Stage 2 is a validated plan: no instance,
+network or volume exists, and no state file has been written. Do not describe
+the project as deployed, highly available, benchmarked or production-ready;
+stages 5–7 are the ones that earn those words.
 
 **Certification scope.** Final production verification and testing
 certification are performed strictly on **Oracle Cloud Infrastructure**, on
@@ -223,7 +229,7 @@ high-RAM Ampere ARM compute with persistent block storage.
 | Stage | Deliverable | Exit criteria |
 | --- | --- | --- |
 | 1 | Scaffold, compose, personas/workflows, task schema, run loop | tests, compose config, image build, API surface — **done** |
-| 2 | OCI network, inference node, block volume, cloud-init | `fmt`, `validate`, `plan` |
+| 2 | OCI network, inference node, block volume, cloud-init | `fmt`, `validate`, `plan` — **done** (`docs/stage-2-verification.txt`) |
 | 3 | Distributed fan-out and queueing | multi-node run record |
 | 4 | Local evaluation: task success, latency, memory | measured metrics |
 | 5 | Live OCI deployment | healthy host, live task run |
@@ -234,9 +240,10 @@ high-RAM Ampere ARM compute with persistent block storage.
 
 ```bash
 git status --porcelain                  # clean
-python -m unittest discover -s tests -q # 31 tests
+python -m unittest discover -s tests -q # 33 tests
 docker compose --env-file .env -f docker/docker-compose.yml config -q
-git check-ignore -v .env
+cd terraform && tofu fmt -recursive -check && tofu validate && cd ..
+git check-ignore -v .env terraform/terraform.tfvars terraform/.terraform
 ```
 
 State what you actually ran, what you did not run, and which stage evidence file

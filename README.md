@@ -5,7 +5,7 @@
 ![Docker](https://img.shields.io/badge/packaging-Docker%20Compose-2496ED?logo=docker&logoColor=white)
 ![OpenTofu](https://img.shields.io/badge/IaC-OpenTofu%20(Stage%202)-844FBA?logo=opentofu&logoColor=white)
 ![OCI](https://img.shields.io/badge/certified%20on-OCI-F80000?logo=oracle&logoColor=white)
-![Stage](https://img.shields.io/badge/stage-1%20%C2%B7%20scaffold-blue)
+![Stage](https://img.shields.io/badge/stage-2%20%C2%B7%20iaC-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 A containerized **multi-agent swarm** that runs entirely on local language
@@ -20,13 +20,14 @@ a run record that says exactly which agent produced which turn. The same Compose
 topology runs on a workstation and, from Stage 2, on OCI compute with a
 persistent block volume for model weights and agent state.
 
-> **Stage 1 scope.** This repository currently ships the scaffold: repository
-> layout, container topology, persona/workflow/task configuration, the
-> orchestration loop and the task API. Syntax, unit tests, container build and
-> the local API surface are verified in
-> [`docs/stage-1-verification.txt`](docs/stage-1-verification.txt). No cloud
-> resource exists yet and no model-quality claim is made — see
-> [Honest limits](#honest-limits).
+> **Stage scope.** Stage 1 shipped the scaffold: repository layout, container
+> topology, persona/workflow/task configuration, the orchestration loop and the
+> task API, verified in [`docs/stage-1-verification.txt`](docs/stage-1-verification.txt).
+> Stage 2 adds the OpenTofu OCI infrastructure contract (`terraform/`): it
+> formats, validates and plans cleanly (8 resources to add) but has **not been
+> applied**, so no cloud resource exists. No model-quality claim is made — see
+> [Honest limits](#honest-limits) and
+> [`docs/stage-2-verification.txt`](docs/stage-2-verification.txt).
 
 ---
 
@@ -114,7 +115,7 @@ rootfs and a 64 MiB `tmpfs` for `/tmp`.
 | `configs/workflows.yaml` | `research_brief`, `code_review`, `reasoning_chain` |
 | `configs/prompts/` | Persona prompts |
 | `configs/tasks/` | JSON Schema + three example tasks |
-| `terraform/` | Stage 2 contract (no `.tf` resources yet) |
+| `terraform/` | OpenTofu OCI modules: VCN, security list, A1.Flex compute, block volume, cloud-init |
 | `tests/test_scaffold.py` | 31 unit tests: config, registry, tools, delegation, loop, auth, compose |
 | `docs/` | Stage evidence |
 
@@ -215,9 +216,10 @@ mismatched bearer token (constant-time comparison).
 
 ## Honest limits
 
-- **No cloud resource exists.** `terraform/` holds the Stage 2 contract and no
-  `.tf` file. Nothing has been applied, planned or validated as
-  infrastructure-as-code yet.
+- **No cloud resource exists.** The OpenTofu modules format, validate and plan
+  cleanly against the live tenancy (8 resources to add, 0 warnings), but nothing
+  has been applied: no VCN, instance, volume or state file exists, and
+  cloud-init has never run on a host.
 - **No model-quality or performance claim.** The suite runs against a scripted
   model double; Stage 1 does not benchmark tokens/second, concurrency or
   multi-node behaviour. Numbers will be recorded in the stage document that
@@ -232,8 +234,10 @@ mismatched bearer token (constant-time comparison).
 ## Cloud portability and certification scope
 
 The topology is cloud-agnostic: the same Compose contract runs on AWS (EC2 +
-EBS), GCP (GCE + Persistent Disk) or OCI (Ampere A1.Flex + Block Volume); only
-`terraform/provider.tf` and the module bodies change in Stage 2.
+EBS), GCP (GCE + Persistent Disk) or OCI (Ampere A1.Flex + Block Volume). The
+variable and output contract in `terraform/` is provider neutral; porting
+replaces `provider.tf` and the three module bodies only. The OCI implementation
+is validated and planned; AWS and GCP are documented ports, not tested targets.
 
 Final production verification and testing certification for this project are
 performed strictly on **Oracle Cloud Infrastructure**, using trial credits with
@@ -245,7 +249,7 @@ AWS and GCP are supported ports, not certified targets.
 | Stage | Deliverable | Exit criteria |
 | --- | --- | --- |
 | 1 | Scaffold, Compose topology, personas, workflows, task schema, orchestration loop | unit tests, compose config, image build, local API surface — **done** (`docs/stage-1-verification.txt`) |
-| 2 | OCI network, inference node, block volume, cloud-init | `fmt`, `validate`, `plan` |
+| 2 | OCI network, inference node, block volume, cloud-init | `fmt`, `validate`, `plan` — **done** (`docs/stage-2-verification.txt`), not applied |
 | 3 | Distributed fan-out and queueing across nodes | multi-node run record |
 | 4 | Local evaluation: task success, latency, memory | measured recall/task metrics |
 | 5 | Live OCI deployment | cloud-init done, volume mounted, healthy services, live run |
